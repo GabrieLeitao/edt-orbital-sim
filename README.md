@@ -28,12 +28,15 @@ Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method, ideal fo
 - `params.py`: Configuration class for masses, material properties, and orbital elements.
 - `environment.py`: Modular environment engine (Magnetic field, Atmosphere).
 - `dynamics.py`: Core physics engine with detailed J2, tension, and drag logic (Numba-accelerated).
-- `simulate.py`: Main entry point for integration and data export.
-- `visualize.py`: Interactive 3D visualizer with time-scrubbing and play/pause.
-- `validate_physics.py`: Physics validation tool (Structural & Energy checks).
+- `engine.py`: Shared simulation kernel (Initialization and ODE Integration).
+- `analysis.py`: Shared telemetry and data export engine (SMA, Energy, Libration).
+- `frames.py`: Coordinate transformation module (ECI to LVLH).
+- `simulate.py`: Lean entry point for the deorbiting mission.
+- `validate_physics.py`: Lean entry point for structural and energy truth checks.
+- `visualize.py`: Interactive 3D visualizer with Global (ECI), Local (Relative), and Technical (LVLH) views.
 - `results/`: Directory containing all exported CSVs and plot images.
+- `legacy_matlab/`: Original MATLAB implementation for historical reference.
 - `requirements.txt`: Python package dependencies.
-- `README_MATLAB.md`: Original documentation for the MATLAB implementation.
 
 ## How to Run
 1. Ensure Python 3.8+ is installed.
@@ -55,21 +58,20 @@ Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method, ideal fo
    ```bash
    python visualize.py
    ```
-   *Controls:* Use the slider to scrub through time, and the Play/Pause button for automatic playback.
+   *Features:* Dual ECI/LVLH analysis, time-scrubbing slider, and play/pause controls.
 
-## Key Features
+## Key Technical Features
 
-### 1. Advanced Validation (`validate_physics.py`)
-Beyond energy conservation, the validation script now provides a comprehensive **Structural Integrity Report**:
-- **Geometric Constraints**: Monitors rope and tether stretch to ensure physical limits are respected.
-- **Libration Analysis**: Tracks in-plane pitch angles to verify gravity-gradient stability.
-- **Automated PASS/FAIL**: Empirically validates the dynamics engine's accuracy.
+### 1. High-Fidelity Coordinate Frames (`frames.py`)
+To analyze the "double pendulum" dynamics with technical precision, the simulation includes an **LVLH (Local Vertical Local Horizontal)** transformation:
+- **Radial Axis**: Always points toward Earth center.
+- **In-Track Axis**: Aligned with the orbital velocity vector.
+- **Stability Analysis**: The LVLH view in `visualize.py` allows you to see the tether libration without the "spinning" of the ECI frame.
 
-### 2. Interactive 3D Visualizer (`visualize.py`)
-A modular tool that allows for detailed post-mission analysis:
-- **Time Scrubbing**: "Go back in time" to analyze critical maneuvers or oscillations.
-- **Dual-View**: Synchronized Global (ECI) and Relative (Target-fixed) perspectives.
-- **Universal Data Support**: Automatically loads from the `results/` directory.
+### 2. Advanced Validation (`validate_physics.py`)
+The system is validated through:
+- **Energy Conservation**: Checks that mechanical energy is conserved to within 1e-5 in the conservative case.
+- **Structural Integrity**: Monitors rope stretch and EDT curvature to ensure physical constraints are respected.
 
 ## Assumptions
 - Tilted Dipole magnetic field.
