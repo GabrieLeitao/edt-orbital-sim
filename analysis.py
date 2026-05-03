@@ -8,7 +8,17 @@ import params as p
 
 @njit
 def calculate_total_energy_fast(p_frame, v_frame, masses, p_arr):
-    """Numba-optimized energy calculation for a single frame"""
+    """
+    Numba-optimized energy calculation for a single frame.
+    
+    Mathematical Physics:
+    1. Kinetic Energy: $T = \sum 0.5 m_i v_i^2$
+    2. Gravitational Potential: $U_g = \sum -G M m_i / r_i$
+    3. Elastic Potential (EDT + Rope): $U_e = \sum 0.5 k (\Delta L)^2$ for $L > L_0$, else 0.
+    
+    The total mechanical energy $E = T + U_g + U_e$ is used to validate the 
+    symplectic-like behavior of the integration engine.
+    """
     num_masses = len(masses)
     mu = p_arr[p.IDX_MU]
     k_edt = p_arr[p.IDX_K_EDT]
@@ -34,7 +44,20 @@ def calculate_total_energy_fast(p_frame, v_frame, masses, p_arr):
     return e_total
 
 def calculate_com_sma(t_vals, X_vals, p_arr, params):
-    """Calculate System Center of Mass and Semi-Major Axis"""
+    """
+    Calculates the Semi-Major Axis (SMA) of the system's Center of Mass (CoM).
+    
+    Mathematical Realism:
+    In a tethered system, calculating SMA for an individual body is misleading due to 
+    large velocity oscillations caused by libration. 
+    1. CoM Position: $R_{com} = \frac{\sum m_i r_i}{\sum m_i}$
+    2. CoM Velocity: $V_{com} = \frac{\sum m_i v_i}{\sum m_i}$
+    3. Specific Orbital Energy: $\epsilon = \frac{V_{com}^2}{2} - \frac{\mu}{|R_{com}|}$
+    4. SMA: $a = -\frac{\mu}{2\epsilon}$
+    
+    This provides a stable representation of the system's global orbital decay 
+    by averaging out the internal multi-body dynamics.
+    """
     num_masses = params.num_masses
     masses = [get_mass_fast(i, p_arr, num_masses) for i in range(num_masses)]
     total_m = sum(masses)
@@ -54,7 +77,16 @@ def calculate_com_sma(t_vals, X_vals, p_arr, params):
     return sma_com
 
 def post_process_telemetry(t_vals, X_vals, p_arr, params):
-    """Extract energy, lengths, and libration metrics"""
+    """
+    Extracts high-fidelity physical metrics from the integrated state vector.
+    
+    Metrics Calculated:
+    1. Mechanical Energy: Validates the integrity of the conservative physics.
+    2. Geometric Stability: Monitors Euclidean distance between coupled masses 
+       to ensure no 'teleportation' or catastrophic structural failure.
+    3. Libration (Pitch): Calculates the angle between the local vertical (Radial CoM) 
+       and the tether's longitudinal axis to verify gravity-gradient stability.
+    """
     num_masses = params.num_masses
     masses = np.array([get_mass_fast(i, p_arr, num_masses) for i in range(num_masses)])
     total_m = np.sum(masses)
@@ -87,7 +119,10 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params):
     return energy, rope_L, edt_L, pitch
 
 def save_csv(filename, t_vals, telemetry_val, telemetry_name, X_vals, params):
-    """Save results to CSV with standardized columns"""
+    """
+    Saves simulation results to a standardized CSV format in the results/ directory.
+    Standardized columns facilitate cross-analysis between mission and validation runs.
+    """
     results_dir = "results"
     if not os.path.exists(results_dir):
         os.makedirs(results_dir)

@@ -5,8 +5,21 @@ from dynamics import tether_dynamics_fast
 
 def setup_initial_state(params):
     """
-    Setup initial radial-aligned state:
-    Configuration (Bottom-to-Top): Tip -> EDT -> SC -> Target
+    Sets up the initial state vector for the coupled multi-body system.
+    
+    Mathematical Assumptions:
+    1. Radial Alignment: The system is initialized in a 'Gravity Gradient' stable configuration, 
+       stretching from the Tip Mass (closest to Earth) to the Target Satellite (highest altitude).
+    2. Circular Orbit Approximation: Initial velocities are based on Keplerian circular velocity 
+       at the target's altitude, adjusted linearly by the local orbital frequency (omega) 
+       across the tether length.
+    3. State Vector: $X = [r_0, r_1, ..., r_n, v_0, v_1, ..., v_n]^T$ where $n$ is the number of masses.
+    
+    Configuration (Radial-Inward):
+    - Index 0: Tip Mass (Boom/Stabilizer)
+    - Index 1 to N_edt: EDT flexible beads (Lumped Mass Model)
+    - Index N_edt + 1: Spacecraft (SC)
+    - Index N_edt + 2: Target Satellite
     """
     a_init = params.R_e + params.alt
     v_orb = np.sqrt(params.mu / a_init)
