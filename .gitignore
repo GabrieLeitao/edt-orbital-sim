@@ -1,0 +1,63 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+bin/
+build/
+develop-eggs/
+dist/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*,cover
+.hypothesis/
+
+# MATLAB
+*.asv
+*.m~
+*.mat
+*.fig
+*.mex*
+*.slxc
+*.simulink_cache
+*.p
+*.log
+slprj/
+
+# OS and Editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Virtual Environment
+.venv/
+venv/
+env/
+ENV/
+
+# Project specific
+results/
+plots/
