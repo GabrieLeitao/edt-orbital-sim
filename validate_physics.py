@@ -6,6 +6,7 @@ import params as p
 from dynamics import tether_dynamics_fast, get_mass_fast
 from numba import njit
 from tqdm import tqdm
+import os
 
 @njit
 def calculate_total_energy_fast(p_frame, v_frame, masses, p_arr):
@@ -109,58 +110,86 @@ def validate_conservation():
         v_frame = X_vals[i, 3*num_masses:].reshape((num_masses, 3))
         energy_total[i] = calculate_total_energy_fast(p_frame, v_frame, masses, p_arr)
 
-    # 4. Plot Results
+    # 4. Geometric & Kinematic Validation
+    print("Post-processing: Checking geometric constraints and libration...")
+    rope_lengths = np.zeros(len(t_vals))
+    edt_lengths = np.zeros(len(t_vals))
+    pitch_angles = np.zeros(len(t_vals)) 
+
+    idx_sc = params.N_edt + 1
+    idx_target = params.N_edt + 2
+
+    for i in range(len(t_vals)):
+        p_frame = X_vals[i, :3*num_masses].reshape((num_masses, 3))
+        rope_vec = p_frame[idx_target] - p_frame[idx_sc]
+        rope_lengths[i] = np.linalg.norm(rope_vec)
+        edt_vec = p_frame[idx_sc] - p_frame[0]
+        edt_lengths[i] = np.linalg.norm(edt_vec)
+        r_com = np.zeros(3)
+        total_m = np.sum(masses)
+        for j in range(num_masses):
+            r_com += (masses[j] / total_m) * p_frame[j]
+        u_v = r_com / np.linalg.norm(r_com)
+        u_tether = (p_frame[idx_target] - p_frame[0]) / (rope_lengths[i] + edt_lengths[i])
+        pitch_angles[i] = np.degrees(np.arccos(np.clip(np.dot(u_v, u_tether), -1.0, 1.0)))
+
+    # 5. Plot Results
     rel_energy_error = (energy_total - energy_total[0]) / np.abs(energy_total[0])
-
-    plt.figure(figsize=(15, 5))
-
-    # Subplot 1: Energy Conservation
-    plt.subplot(1, 2, 1)
+    plt.figure(figsize=(15, 10))
+    plt.subplot(2, 2, 1)
     plt.plot(t_vals, rel_energy_error)
     plt.grid(True)
-    plt.title("Relative Energy Conservation (Conservative Test)")
-    plt.xlabel("Time [seconds]")
-    plt.ylabel("(E - E0) / |E0|")
-
-    # Subplot 2: Final Configuration
-    plt.subplot(1, 2, 2)
-    final_pos = X_vals[-1, :3*num_masses].reshape((num_masses, 3))
-    # Relative to Target
-    pos_target = final_pos[params.N_edt + 2]
-    rel_pos = final_pos - pos_target
-    plt.plot(rel_pos[:, 0], rel_pos[:, 1], '-ok')
-    plt.gca().set_aspect('equal')
+    plt.title("Energy Conservation Error (Target: < 1e-4)")
+    plt.ylabel("(E-E0)/|E0|")
+    plt.subplot(2, 2, 2)
+    plt.plot(t_vals, rope_lengths, label='Rope (50m)')
+    plt.axhline(y=params.L_rope, color='r', linestyle='--')
     plt.grid(True)
-    plt.xlabel('Radial [m]')
-    plt.ylabel('In-Track [m]')
-    plt.title('Final Tether State (Conservative)')
-
+    plt.title("Rope Geometric Constraint")
+    plt.ylabel("Length [m]")
+    plt.legend()
+    plt.subplot(2, 2, 3)
+    plt.plot(t_vals, pitch_angles)
+    plt.grid(True)
+    plt.title("Libration Stability (In-Plane Pitch)")
+    plt.ylabel("Angle [deg]")
+    plt.xlabel("Time [s]")
+    plt.subplot(2, 2, 4)
+    plt.plot(t_vals, edt_lengths)
+    plt.axhline(y=params.L_edt, color='r', linestyle='--')
+    plt.grid(True)
+    plt.title("EDT Structural Integrity")
+    plt.ylabel("Total EDT Length [m]")
+    plt.xlabel("Time [s]")
+    
     plt.tight_layout()
+    results_dir = "results"
+    if not os.path.exists(results_dir):
+        os.makedirs(results_dir)
+    plot_filename = os.path.join(results_dir, "validation_plots.png")
+    plt.savefig(plot_filename)
+    print(f"Validation plots saved to {plot_filename}")
     plt.show()
-
+    
     max_err = np.max(np.abs(rel_energy_error))
-    print(f"Max Relative Energy Error: {max_err:.2e}")
-
-    # 5. Full State CSV Export for universal analysis
+    print(f"\n--- Validation Report ---")
+    print(f"1. Energy Stability: {max_err:.2e}")
+    print(f"2. Max Rope Stretch: {np.max(rope_lengths) - params.L_rope:.4f} m")
+    print(f"3. Max Pitch Libration: {np.max(pitch_angles):.2f} degrees")
+    print(f"4. Structure Check: {'Stable' if np.max(rope_lengths) < params.L_rope * 1.1 else 'UNSTABLE'}")
+    
     import pandas as pd
     cols = ['time_s', 'rel_energy_error']
     for i in range(num_masses):
         label = f"m{i}_target" if i == params.N_edt + 2 else (f"m{i}_sc" if i == params.N_edt + 1 else (f"m{i}_tip" if i == 0 else f"m{i}_bead"))
         cols += [f'{label}_rx_m', f'{label}_ry_m', f'{label}_rz_m', f'{label}_vx_ms', f'{label}_vy_ms', f'{label}_vz_ms']
-
-    data_out = np.hstack([
-        t_vals.reshape(-1, 1), 
-        rel_energy_error.reshape(-1, 1), 
-        X_vals
-    ])
-
+    data_out = np.hstack([t_vals.reshape(-1, 1), rel_energy_error.reshape(-1, 1), X_vals])
     val_df = pd.DataFrame(data_out, columns=cols)
-    val_csv = "validation_results.csv"
+    val_csv = os.path.join(results_dir, "validation_results.csv")
     val_df.to_csv(val_csv, index=False)
     print(f"Full validation state exported to {val_csv}")
 
     if max_err < 1e-4:
-
         print("PASS: Physics engine conserves energy correctly.")
     else:
         print("FAIL: Significant energy drift detected.")

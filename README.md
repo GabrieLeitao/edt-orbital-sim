@@ -28,9 +28,10 @@ Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method, ideal fo
 - `params.py`: Configuration class for masses, material properties, and orbital elements.
 - `environment.py`: Modular environment engine (Magnetic field, Atmosphere).
 - `dynamics.py`: Core physics engine with detailed J2, tension, and drag logic (Numba-accelerated).
-- `simulate.py`: Main entry point for integration, CSV export, and plotting.
-- `visualize.py`: Standalone script for dual-view 3D animation of orbital and relative dynamics.
-- `validate_physics.py`: Physics validation tool that verifies energy conservation (Zero-Current test).
+- `simulate.py`: Main entry point for integration and data export.
+- `visualize.py`: Interactive 3D visualizer with time-scrubbing and play/pause.
+- `validate_physics.py`: Physics validation tool (Structural & Energy checks).
+- `results/`: Directory containing all exported CSVs and plot images.
 - `requirements.txt`: Python package dependencies.
 - `README_MATLAB.md`: Original documentation for the MATLAB implementation.
 
@@ -40,30 +41,35 @@ Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method, ideal fo
    ```bash
    pip install -r requirements.txt
    ```
-3. **Validate Physics**: (Recommended first step)
+3. **Validate Physics**:
    ```bash
    python validate_physics.py
    ```
+   *Outputs:* `results/validation_results.csv` and `results/validation_plots.png`.
 4. **Run Simulation**:
    ```bash
    python simulate.py
    ```
+   *Outputs:* `results/simulation_results.csv` and `results/simulation_plots.png`.
 5. **Visualize Results**:
    ```bash
    python visualize.py
    ```
+   *Controls:* Use the slider to scrub through time, and the Play/Pause button for automatic playback.
 
-## Key Tools
+## Key Features
 
-### 1. Physics Validation (`validate_physics.py`)
-To ensure the multi-body dynamics are mathematically correct, this script runs a "Conservative Test" with zero electrodynamic current and zero drag.
-- **Metric**: It calculates the total mechanical energy (Kinetic + Gravitational Potential + Elastic Potential) for every frame.
-- **Success**: A relative energy error < 1e-4 confirms that the "double pendulum" math and J2 perturbations are physically sound.
+### 1. Advanced Validation (`validate_physics.py`)
+Beyond energy conservation, the validation script now provides a comprehensive **Structural Integrity Report**:
+- **Geometric Constraints**: Monitors rope and tether stretch to ensure physical limits are respected.
+- **Libration Analysis**: Tracks in-plane pitch angles to verify gravity-gradient stability.
+- **Automated PASS/FAIL**: Empirically validates the dynamics engine's accuracy.
 
-### 2. 3D Visualization Tool (`visualize.py`)
-Provides a dual-view window to analyze the system's behavior:
-- **Global View**: Shows the orbital path around a wireframe Earth. The camera automatically follows the system as it deorbits.
-- **Relative View**: A zoomed-in view fixed on the target satellite. This is the best way to observe the **libration (swinging)** and **double-pendulum** dynamics of the SC and EDT.
+### 2. Interactive 3D Visualizer (`visualize.py`)
+A modular tool that allows for detailed post-mission analysis:
+- **Time Scrubbing**: "Go back in time" to analyze critical maneuvers or oscillations.
+- **Dual-View**: Synchronized Global (ECI) and Relative (Target-fixed) perspectives.
+- **Universal Data Support**: Automatically loads from the `results/` directory.
 
 ## Assumptions
 - Tilted Dipole magnetic field.

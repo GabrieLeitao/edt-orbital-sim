@@ -3,15 +3,17 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
 from mpl_toolkits.mplot3d import Axes3D
+import os
 
-def interactive_visualization(csv_path="simulation_results.csv"):
+def interactive_visualization(csv_path=os.path.join("results", "simulation_results.csv")):
     # 1. Load Data
-    if not np.any([os.path.exists(csv_path), os.path.exists("validation_results.csv")]):
-        print(f"Error: {csv_path} not found. Run simulate.py first.")
+    val_path = os.path.join("results", "validation_results.csv")
+    if not os.path.exists(csv_path) and not os.path.exists(val_path):
+        print(f"Error: Neither {csv_path} nor {val_path} found. Run simulate.py or validate_physics.py first.")
         return
 
     # Fallback to validation if main results missing
-    actual_path = csv_path if os.path.exists(csv_path) else "validation_results.csv"
+    actual_path = csv_path if os.path.exists(csv_path) else val_path
     print(f"Loading data from {actual_path}...")
     df = pd.read_csv(actual_path)
     
@@ -113,5 +115,4 @@ def interactive_visualization(csv_path="simulation_results.csv"):
         animate_step()
 
 if __name__ == "__main__":
-    import os
     interactive_visualization()

@@ -104,6 +104,11 @@ def simulate():
     sma_com = -params.mu / (2.0 * energy_com)
     
     import pandas as pd
+    import os
+    results_dir = "results"
+    if not os.path.exists(results_dir):
+        os.makedirs(results_dir)
+
     cols = ['time_s', 'sma_com_km']
     for i in range(num_masses):
         label = f"m{i}_target" if i == params.N_edt + 2 else (f"m{i}_sc" if i == params.N_edt + 1 else (f"m{i}_tip" if i == 0 else f"m{i}_bead"))
@@ -111,8 +116,9 @@ def simulate():
         
     data_out = np.hstack([t_vals.reshape(-1, 1), sma_com.reshape(-1, 1), X_vals])
     df = pd.DataFrame(data_out, columns=cols)
-    df.to_csv("simulation_results.csv", index=False)
-    print("Data exported successfully to simulation_results.csv")
+    csv_filename = os.path.join(results_dir, "simulation_results.csv")
+    df.to_csv(csv_filename, index=False)
+    print(f"Data exported successfully to {csv_filename}")
 
     # Plots
     plt.figure(figsize=(12, 5))
@@ -133,7 +139,11 @@ def simulate():
     plt.xlabel('Radial [m]')
     plt.ylabel('In-Track [m]')
     plt.title('Final Tether Configuration')
+    
     plt.tight_layout()
+    plot_filename = os.path.join(results_dir, "simulation_plots.png")
+    plt.savefig(plot_filename)
+    print(f"Plots saved to {plot_filename}")
     plt.show()
 
 if __name__ == "__main__":
