@@ -6,7 +6,7 @@ num_masses = length(X) / 6;
 pos = reshape(X(1:3*num_masses), 3, num_masses);
 vel = reshape(X(3*num_masses+1:end), 3, num_masses);
 
-% 1. Gravity & J2 Perturbation (Vectorized)
+% 1. Gravity, J2 Perturbation & Atmospheric Drag (Vectorized)
 r_norms = sqrt(sum(pos.^2, 1));
 r_norms3 = r_norms.^3;
 r_norms5 = r_norms3 .* r_norms.^2;
@@ -23,6 +23,23 @@ a_j2 = pref .* [pos(1,:) .* (5*z2./r2 - 1); ...
                 pos(2,:) .* (5*z2./r2 - 1); ...
                 pos(3,:) .* (5*z2./r2 - 3)];
 accel = accel + a_j2;
+
+% Atmospheric Drag
+% Sample environment at each node
+for i = 1:num_masses
+    env_i = environment(pos(:,i), vel(:,i), t, params);
+    % Simplified: assume static atmosphere (v_rel = v)
+    v_norm = norm(vel(:,i));
+    if i == 1 % Target
+        node_area = params.Area_sc; % Assuming similar area for target for simplicity
+    elseif i == 2 % SC
+        node_area = params.Area_sc;
+    else % Beads and Tip
+        node_area = (params.L_edt / params.N_edt) * 0.001; % 1mm wire assumed
+    end
+    f_drag = -0.5 * env_i.rho * params.Cd * node_area * v_norm * vel(:,i);
+    accel(:,i) = accel(:,i) + f_drag / params.m_vec(i);
+end
 
 % 2. Internal Forces (Tension)
 % Link 1: Rope (Target to SC)

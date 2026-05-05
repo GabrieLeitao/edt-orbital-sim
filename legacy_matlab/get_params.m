@@ -1,6 +1,8 @@
 %% Simulation Parameters and Assumptions
 % This file centralizes all constants and assumptions for the simulation.
 
+function params = get_params()
+
 % 1. Physical Constants
 params.mu = 3.986004418e14;      % Earth's gravitational parameter [m^3/s^2]
 params.R_e = 6378137;            % Earth's mean radius [m]
@@ -22,7 +24,7 @@ params.N_edt = 10;               % Number of segments (beads = N_edt + 1)
 params.m_edt_total = 10;         % Total tether mass [kg]
 params.k_edt = 5e4;              % Segment stiffness [N/m]
 params.c_edt = 5e2;              % Segment damping [N*s/m]
-params.I_edt = 2.0;              % Constant current assumption [A] (can be functionalized)
+params.I_edt = -2.0;             % Negative current for deorbiting [A]
 
 % 5. Environment Assumptions
 params.Cd = 2.2;                 % Drag coefficient
@@ -33,3 +35,5 @@ params.B_mag = 3e-5;             % Reference B-field at LEO [Tesla]
 params.alt = 500e3;              % Altitude [m]
 params.inc = deg2rad(51.6);      % Inclination [rad] (ISS-like)
 params.e = 0.001;                % Near-circular eccentricity
+
+end
