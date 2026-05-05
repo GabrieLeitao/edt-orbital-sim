@@ -26,19 +26,22 @@ class SimulationParams:
         self.beta_rope = 2.0 * 0.5 / w_rope 
 
         # 4. EDT Properties (SC-Tip)
-        self.L_edt = 2000.0           # Total EDT length [m]
+        self.L_edt = 500.0            # Total EDT length [m]
         self.N_edt = 10               # Number of segments
-        self.m_edt_total = 10.0       # Total tether mass [kg]
         self.E_edt = 70e9             # Young's Modulus (Aluminum) [Pa]
-        self.diam_edt = 0.001         # 1mm wire
+        self.diam_edt = 0.0015        # 1.5mm wire
+        self.rho_aluminum = 2700.0    # Aluminum density [kg/m^3]
+        
+        # Scientific Scaling: Derive mass from geometry
+        area_edt = np.pi * (self.diam_edt / 2.0)**2
+        self.m_edt_total = self.L_edt * area_edt * self.rho_aluminum
         
         # Electrical Properties
-        self.rho_al = 2.65e-8         # Aluminum resistivity [Ohm*m]
+        self.rho_al_res = 2.65e-8     # Aluminum resistivity [Ohm*m]
         self.z_plasma = 100.0         # Plasma contactor impedance [Ohm]
-        self.r_load = 1000.0          # Load resistance to control current [Ohm]
+        self.r_load = 500.0           # Load resistance [Ohm]
         
         # Derived EDT Damping (Targeting zeta = 0.7 for critical damping of 'snaps')
-        area_edt = np.pi * (self.diam_edt / 2.0)**2
         l_seg = self.L_edt / (self.N_edt + 1)
         m_seg = self.m_edt_total / (self.N_edt + 1)
         k_seg = (self.E_edt * area_edt) / l_seg
@@ -66,7 +69,7 @@ class SimulationParams:
             self.L_rope, self.E_rope, self.diam_rope, self.beta_rope,
             self.L_edt, float(self.N_edt), self.m_edt_total,
             self.E_edt, self.diam_edt, self.beta_edt,
-            self.rho_al, self.z_plasma, self.r_load, self.Cd, self.Area_sc
+            self.rho_al_res, self.z_plasma, self.r_load, self.Cd, self.Area_sc
         ], dtype=np.float64)
 
 # Indices for the flat array
