@@ -8,13 +8,18 @@ a = params.R_e + params.alt;
 v_orb = sqrt(params.mu / a);
 omega = v_orb / a;
 
-% Masses: Target(1), SC(2), Beads(3...N+2), Tip(N+3)
-num_masses = 3 + params.N_edt; 
+% Masses: Target(1), SC(2), Beads(3...N+1), Tip(N+2)
+% Total N_edt segments in the EDT part.
+num_masses = 2 + params.N_edt; 
 X0 = zeros(6 * num_masses, 1);
 
+% Pre-calculate mass vector for optimized dynamics
+% Internal beads get equal share of EDT mass
+params.m_vec = [params.m_target; params.m_sc; ...
+                ones(params.N_edt-1, 1) * (params.m_edt_total / params.N_edt); ...
+                params.m_tip];
+
 % Position indices (ECI)
-% Assume target is at origin of LVLH (for setup)
-% Initial configuration: Target - SC - Tip (Vertical along radial)
 r_target = [a; 0; 0];
 v_target = [0; v_orb; 0];
 
@@ -42,10 +47,14 @@ X0(3*num_masses+1:end) = vel(:);
 
 % 2. Integration
 t_span = [0, 5400 * 2]; % 2 Orbits
-options = odeset('RelTol', 1e-6, 'AbsTol', 1e-9);
+% Optimized solver options with terminal progress bar
+options = odeset('RelTol', 1e-6, 'AbsTol', 1e-9, ...
+                 'OutputFcn', @(t,y,flag) ode_progress(t, y, flag, t_span));
 
 fprintf('Starting simulation...\n');
+tic;
 [t, X] = ode113(@(t, X) tether_dynamics(t, X, params), t_span, X0, options);
+toc;
 fprintf('Simulation finished.\n');
 
 % 3. Post-Processing: Semi-major axis decay
