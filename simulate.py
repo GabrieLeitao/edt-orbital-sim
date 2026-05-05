@@ -34,7 +34,7 @@ def run_mission():
     X0 = setup_initial_state(params)
     
     # 2. Propagate
-    sol = integrate_system(X0, (0, 5400 * 2), p_arr, "Propagating Deorbit")
+    sol = integrate_system(X0, (0, 5400), p_arr, "Propagating Deorbit")
     
     # 3. Analyze & Export
     sma_com = calculate_com_sma(sol.t, sol.y.T, p_arr, params)

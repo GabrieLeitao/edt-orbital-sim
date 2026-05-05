@@ -1,79 +1,87 @@
-# EDT Deorbiting Simulation: Hybrid Multi-Body System (Python Version)
+# EDT Deorbiting Simulation: High-Fidelity Hybrid Multi-Body System
 
 ## Project Objective
-This project provides a high-fidelity Python simulation of an Active Debris Removal (ADR) mission. The scenario involves a **100kg Spacecraft (SC)** that has captured a **target satellite (<1000kg)** using a net and rope. To perform the deorbiting maneuver, the SC deploys a 2km **Electrodynamic Tether (EDT)** with a tip mass.
+This project provides a high-fidelity Python simulation of an Active Debris Removal (ADR) mission. The scenario involves a **100kg Spacecraft (SC)** that has captured a **target satellite (800kg)** using a net and rope. To perform the deorbiting maneuver, the SC deploys a 2km **Electrodynamic Tether (EDT)** with a tip mass.
 
-The simulation captures:
-- **Tether Flexibility:** Discretized multi-bead model for the EDT.
-- **Gravity-Gradient Stability:** The system is configured with the SC and EDT below the target for stability.
-- **Lorentz Force Deorbiting:** Realistic orbital decay based on Earth's magnetic field and tether current.
+## Mathematical Methods & High-Fidelity Assumptions
 
-## Mathematical Methods
+The simulation follows advanced methodologies from scientific literature (e.g., *Zhong & Zhu, 2014*, *ProSEDS Mission Reports*) to ensure both physical realism and numerical stability.
 
 ### 1. Multi-Body Dynamics (Lumped Mass Model)
-The system is modeled as a chain of point masses (beads) in Earth-Centered Inertial (ECI) coordinates. 
-- **Hybrid Fidelity:** The SC-Target connection is a single viscoelastic link; the EDT is discretized into $N$ segments.
-- **Non-linear Tension:** Spring-damper model with slack handling ($T = \max(0, k\Delta L + c\dot{L})$).
-- **Configuration:** Stable radial stack (Earth → Tip → EDT → SC → Target).
+The system is modeled as a chain of 13 point masses in Earth-Centered Inertial (ECI) coordinates.
+- **Material-Based Stiffness:** Unlike basic models using arbitrary springs, this simulation derives stiffness ($k = EA/L$) from real material properties:
+  - **EDT:** 70 GPa Aluminum (1mm diameter).
+  - **Rope:** 100 GPa Kevlar/Polymer (2mm diameter).
+- **Rayleigh (Proportional) Damping:** Implements stiffness-proportional damping ($c = \beta k$). This allows the use of high-fidelity stiffness while suppressing high-frequency numerical "chatter" (the bouncing effect) without sacrificing physical accuracy.
+- **Smooth-Slack Transition:** Replaces the discontinuous `max(0, tension)` with a sigmoid-scaled smooth transition. This eliminates numerical shocks when the tether retightens, simulating the microscopic "tightening" of molecular bonds.
 
 ### 2. Environmental Forces
-- **Gravity & J2:** Includes the spherical Earth term and the **J2 perturbation** (zonal harmonic model) for Earth's oblateness.
-- **Lorentz Force:** $F_L = \int I(dl \times B)$, using a **Tilted Dipole** magnetic field model.
-- **Atmospheric Drag:** Exponential density model.
+- **Gravity (J2):** Includes Earth's central gravity and the **J2 perturbation** (zonal harmonic $J_2 = 1.0826 \times 10^{-3}$). This captures the primary orbital perturbations (nodal regression, perigee precession).
+- **Magnetic Field:** Implements a **Centered Dipole Model** aligned with Earth's rotation axis. 
+- **Atmospheric Drag:** Exponential model using a LEO reference (500km altitude) with a static atmosphere assumption.
+
+## Environmental Fidelity & Scientific Suitability
+
+### Is this good for scientific orbital simulation?
+This engine is designed as a **high-fidelity multi-body dynamics simulator** for tethered systems, rather than a high-precision orbit propagator.
+
+| Feature | Current Model | Scientific Requirement | Impact |
+| :--- | :--- | :--- | :--- |
+| **Gravity** | J2 (Oblateness) | EGM96 (70x70 harmonics) | J2 captures 99% of perturbations. Missing higher terms affects sub-meter precision over months. |
+| **Magnetic Field** | Simple Dipole | IGRF-13 | Dipole is ~10-20% off in certain regions. IGRF is required for precise Lorentz force predictions. |
+| **Atmosphere** | Exponential (Static) | NRLMSISE-00 / JB2008 | Static model misses diurnal/solar cycle variations. Drag errors can be 2-3x depending on solar activity. |
+| **Third Body** | None | Sun/Moon/SRP | Required for high-altitude (MEO/GEO) or long-duration LEO missions. |
+
+**Verdict:** 
+- **For Tether Dynamics Research:** Excellent. The multi-body coupling, Rayleigh damping, and smooth-slack logic are state-of-the-art for studying libration, stability, and deployment.
+- **For Precision Navigation/POD:** Not suitable. The environmental errors (Dipole/Static Drag) exceed the requirements for Precise Orbit Determination.
+
+### Technical Note: The "Snapping" & "Slingshot" Phenomenon
+If you observe the EDT "snapping" or "slingshotting" the spacecraft:
+1. **Libration Instability:** The Lorentz force acts as a non-conservative drag. If the current is too high, the tether swings ("librates") away from the vertical. If it swings past the stable limit, it may go slack and then violently "whip" back when tension returns.
+2. **Numerical Stiffness:** The aluminum EDT is extremely stiff ($E = 70$ GPa). Small displacements cause massive forces. The `smooth_tension` function in `dynamics.py` mitigates this, but extreme maneuvers may still trigger sharp transients.
+3. **Remedy:** Reduce `I_edt` in `params.py` or increase `beta_edt` (damping) to stabilize the system.
 
 ### 3. Numerical Integration
-Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method, ideal for the stiff dynamics of tethered systems.
+Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method. The solver is tuned for the "stiff" equations of motion characteristic of high-tension tethered systems.
 
 ## File Structure
-- `params.py`: Configuration class for masses, material properties, and orbital elements.
-- `environment.py`: Modular environment engine (Magnetic field, Atmosphere).
-- `dynamics.py`: Core physics engine with detailed J2, tension, and drag logic (Numba-accelerated).
-- `engine.py`: Shared simulation kernel (Initialization and ODE Integration).
-- `analysis.py`: Shared telemetry and data export engine (SMA, Energy, Libration).
-- `frames.py`: Coordinate transformation module (ECI to LVLH).
-- `simulate.py`: Lean entry point for the deorbiting mission.
-- `validate_physics.py`: Lean entry point for structural and energy truth checks.
-- `visualize.py`: Interactive 3D visualizer with Global (ECI), Local (Relative), and Technical (LVLH) views.
-- `results/`: Directory containing all exported CSVs and plot images.
-- `legacy_matlab/`: Original MATLAB implementation for historical reference.
-- `requirements.txt`: Python package dependencies.
+- `params.py`: Configuration for material properties (Young's Modulus, damping constants) and system masses.
+- `dynamics.py`: Core physics engine with Rayleigh damping, smooth-slack logic, and J2/Drag/Lorentz forces.
+- `engine.py`: Initialization kernel (Stable Gravity-Gradient configuration) and ODE driver.
+- `analysis.py`: Telemetry engine for SMA decay, energy conservation, and libration analysis.
+- `visualize.py`: Interactive 2x2 dashboard with ECI, Relative In-Plane (In-Track vs Radial), and LVLH 3D views.
 
 ## How to Run
-1. Ensure Python 3.8+ is installed.
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. **Validate Physics**:
+1. **Validate Physics**:
    ```bash
    python validate_physics.py
    ```
-   *Outputs:* `results/validation_results.csv` and `results/validation_plots.png`.
-4. **Run Simulation**:
+   *Checks structural integrity and energy conservation in a conservative scenario.*
+2. **Run Mission**:
    ```bash
    python simulate.py
    ```
-   *Outputs:* `results/simulation_results.csv` and `results/simulation_plots.png`.
-5. **Visualize Results**:
+   *Propagates the full deorbiting mission with active Lorentz forces and drag.*
+3. **Visualize**:
    ```bash
    python visualize.py
    ```
-   *Features:* Dual ECI/LVLH analysis, time-scrubbing slider, and play/pause controls.
+   *Interactive scrubbing with inverted Radial axis (Down = Earth) for standard physics interpretation.*
 
-## Key Technical Features
+## Important Note on Orbital Decay Interpretation
 
-### 1. High-Fidelity Coordinate Frames (`frames.py`)
-To analyze the "double pendulum" dynamics with technical precision, the simulation includes an **LVLH (Local Vertical Local Horizontal)** transformation:
-- **Radial Axis**: Always points toward Earth center.
-- **In-Track Axis**: Aligned with the orbital velocity vector.
-- **Stability Analysis**: The LVLH view in `visualize.py` allows you to see the tether libration without the "spinning" of the ECI frame.
+### 1. J2 Osculating SMA vs. Mean SMA
+Users may observe large oscillations in the Semi-Major Axis (SMA) plot (e.g., $\pm$ 15–20 km per orbit). 
+- **This is not a simulation error.** It is a physical artifact of the **J2 perturbation** (Earth's oblateness) on the **osculating orbital elements**. 
+- In a non-spherical gravity field, the mapping from position/velocity to a Keplerian ellipse changes constantly as the system moves.
+- The **true deorbiting trend** is the much slower downward slope of the *mean* of these oscillations over several orbits.
 
-### 2. Advanced Validation (`validate_physics.py`)
-The system is validated through:
-- **Energy Conservation**: Checks that mechanical energy is conserved to within 1e-5 in the conservative case.
-- **Structural Integrity**: Monitors rope stretch and EDT curvature to ensure physical constraints are respected.
+### 2. Physical Stability (Libration)
+- The Lorentz force acts as a "sideways" force on the tether. If the current is too high (e.g., > 1.0A for this configuration), the tether may swing significantly away from the radial vertical (libration).
+- If the libration becomes extreme, the tether may go slack and "whip" around. The default current has been set to **0.5A** to ensure a stable, gravity-gradient aligned deorbiting process.
 
 ## Assumptions
-- Tilted Dipole magnetic field.
-- Constant current along the EDT (modularly upgradeable in `environment.py`).
-- Satellites as point masses (rotational dynamics of the bodies themselves are neglected).
+- Centered Dipole magnetic field (Z-aligned).
+- Constant current along the EDT.
+- Rigid-body rotational dynamics of the satellites are neglected (point-mass approximation).

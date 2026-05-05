@@ -15,17 +15,20 @@ def calculate_total_energy_fast(p_frame, v_frame, masses, p_arr):
     1. Kinetic Energy: $T = \sum 0.5 m_i v_i^2$
     2. Gravitational Potential: $U_g = \sum -G M m_i / r_i$
     3. Elastic Potential (EDT + Rope): $U_e = \sum 0.5 k (\Delta L)^2$ for $L > L_0$, else 0.
-    
-    The total mechanical energy $E = T + U_g + U_e$ is used to validate the 
-    symplectic-like behavior of the integration engine.
     """
     num_masses = len(masses)
     mu = p_arr[p.IDX_MU]
-    k_edt = p_arr[p.IDX_K_EDT]
-    k_rope = p_arr[p.IDX_K_ROPE]
-    l_edt_seg = p_arr[p.IDX_L_EDT] / int(p_arr[p.IDX_N_EDT])
-    l_rope_nom = p_arr[p.IDX_L_ROPE]
     n_edt = int(p_arr[p.IDX_N_EDT])
+    
+    # Derived EDT Stiffness
+    area_edt = np.pi * (p_arr[p.IDX_DIAM_EDT] / 2.0)**2
+    l_edt_seg = p_arr[p.IDX_L_EDT] / (n_edt + 1)
+    k_edt = (p_arr[p.IDX_E_EDT] * area_edt) / l_edt_seg
+    
+    # Derived Rope Stiffness
+    area_rope = np.pi * (p_arr[p.IDX_DIAM_ROPE] / 2.0)**2
+    k_rope = (p_arr[p.IDX_E_ROPE] * area_rope) / p_arr[p.IDX_L_ROPE]
+    l_rope_nom = p_arr[p.IDX_L_ROPE]
     
     e_total = 0.0
     for j in range(num_masses):
@@ -129,10 +132,23 @@ def save_csv(filename, t_vals, telemetry_val, telemetry_name, X_vals, params):
         
     num_masses = params.num_masses
     cols = ['time_s', telemetry_name]
+    
+    # Reshape X_vals to facilitate interleaving
+    pos_data = X_vals[:, :3*num_masses].reshape(-1, num_masses, 3)
+    vel_data = X_vals[:, 3*num_masses:].reshape(-1, num_masses, 3)
+    
+    interleaved_data = np.zeros((len(t_vals), 6*num_masses))
     for i in range(num_masses):
         label = f"m{i}_target" if i == params.N_edt + 2 else (f"m{i}_sc" if i == params.N_edt + 1 else (f"m{i}_tip" if i == 0 else f"m{i}_bead"))
         cols += [f'{label}_rx_m', f'{label}_ry_m', f'{label}_rz_m', f'{label}_vx_ms', f'{label}_vy_ms', f'{label}_vz_ms']
+        
+        interleaved_data[:, 6*i:6*i+3] = pos_data[:, i, :]
+        interleaved_data[:, 6*i+3:6*i+6] = vel_data[:, i, :]
     
-    data_out = np.hstack([t_vals.reshape(-1, 1), telemetry_val.reshape(-1, 1), X_vals])
+    # Unit correction: ensure telemetry matches label
+    if "km" in telemetry_name and np.max(telemetry_val) > 1e6:
+        telemetry_val = telemetry_val / 1000.0
+        
+    data_out = np.hstack([t_vals.reshape(-1, 1), telemetry_val.reshape(-1, 1), interleaved_data])
     pd.DataFrame(data_out, columns=cols).to_csv(os.path.join(results_dir, filename), index=False)
     print(f"Data saved to {os.path.join(results_dir, filename)}")

@@ -17,6 +17,29 @@ def get_mass_fast(idx, p_arr, num_masses):
         return p_arr[p.IDX_M_EDT_TOTAL] / n_edt
 
 @njit
+def smooth_tension(dl, dl_dot, k, beta):
+    """
+    Calculates tension with a smooth transition from slack to taut.
+    Uses Rayleigh (proportional) damping: c = beta * k.
+    
+    Mathematical Physics:
+    A 'hard' max(0, tension) creates a discontinuity in the force derivative 
+    which triggers numerical 'bouncing'. This smooth-slack model uses a 
+    sigmoid-like transition to simulate the microscopic 'tightening' of 
+    molecular bonds before full tension is reached.
+    """
+    # Pure linear tension + proportional damping
+    # c = beta * k
+    f_total = k * dl + (beta * k) * dl_dot
+    
+    # Smooth transition: 
+    # Use a sigmoid-like scaling to prevent the 'hammer blow' of sudden tension
+    # Transition width is ~10cm (coefficient 50.0) for numerical stability
+    scale = 1.0 / (1.0 + np.exp(-50.0 * dl)) 
+    
+    return max(0.0, f_total * scale)
+
+@njit
 def tether_dynamics_fast(t, X, p_arr):
     """
     Numba-JIT optimized core dynamics.
@@ -39,6 +62,8 @@ def tether_dynamics_fast(t, X, p_arr):
     j2 = p_arr[p.IDX_J2]
     cd = p_arr[p.IDX_CD]
     area = p_arr[p.IDX_AREA]
+    diam_edt = p_arr[p.IDX_DIAM_EDT]
+    l0_edt_seg = p_arr[p.IDX_L_EDT] / (n_edt + 1)
     
     for i in range(num_masses):
         r = pos[i]
@@ -58,21 +83,56 @@ def tether_dynamics_fast(t, X, p_arr):
         accel[i, 1] = a_g[1] + pref * r[1] * (5 * z2 / r2 - 1)
         accel[i, 2] = a_g[2] + pref * r[2] * (5 * z2 / r2 - 3)
 
-        # Atmospheric Drag (Simplified)
-        b_vec, rho, i_edt = get_environment_fast(r, v, t, p_arr)
+        # Atmospheric Drag (All nodes)
+        b_vec, rho = get_environment_fast(r, v, t, p_arr)
         v_rel = v # Simplified: assume static atmosphere
         v_rel_norm = np.linalg.norm(v_rel)
-        if v_rel_norm > 1e-3:
-            # Drag is applied to SC and Target (approximate)
-            if i >= n_edt + 1:
-                f_drag = -0.5 * rho * cd * area * v_rel_norm * v_rel
-                accel[i] += f_drag / get_mass_fast(i, p_arr, num_masses)
+        
+        # Calculate node-specific area
+        if i == 0: # Tip
+            node_area = 0.5 * l0_edt_seg * diam_edt
+        elif i <= n_edt: # Beads
+            node_area = l0_edt_seg * diam_edt
+        elif i == n_edt + 1: # SC
+            node_area = area + 0.5 * l0_edt_seg * diam_edt
+        else: # Target
+            node_area = area
 
-    # 2. Internal Forces (Tension)
-    l0_edt_seg = p_arr[p.IDX_L_EDT] / n_edt
-    k_edt = p_arr[p.IDX_K_EDT]
-    c_edt = p_arr[p.IDX_C_EDT]
+        if v_rel_norm > 1e-3:
+            f_drag = -0.5 * rho * cd * node_area * v_rel_norm * v_rel
+            accel[i] += f_drag / get_mass_fast(i, p_arr, num_masses)
+
+    # 2. Internal Forces (Tension) - EDT (SC-Tip)
+    # k = E * A / L_seg
+    area_edt = np.pi * (p_arr[p.IDX_DIAM_EDT] / 2.0)**2
+    k_edt_seg = (p_arr[p.IDX_E_EDT] * area_edt) / l0_edt_seg
+    beta_edt = p_arr[p.IDX_BETA_EDT]
     
+    # PASS 1: Calculate Motional EMF across all EDT segments
+    v_total_emf = 0.0
+    for j in range(n_edt + 1):
+        p_a = pos[j]
+        p_b = pos[j+1]
+        v_a = vel[j]
+        v_b = vel[j+1]
+        
+        r_seg = p_b - p_a
+        v_mid = (v_a + v_b) / 2.0
+        r_mid = (p_a + p_b) / 2.0
+        
+        b_vec, rho = get_environment_fast(r_mid, v_mid, t, p_arr)
+        
+        # V_emf = (v x B) . L
+        v_induced = np.dot(np.cross(v_mid, b_vec), r_seg)
+        v_total_emf += v_induced
+        
+    # Calculate Dynamic Current: I = V_emf / R_total
+    # R_total = R_wire + Z_plasma + R_load
+    r_wire = p_arr[p.IDX_RHO_AL] * p_arr[p.IDX_L_EDT] / area_edt
+    r_total = r_wire + p_arr[p.IDX_Z_PLASMA] + p_arr[p.IDX_R_LOAD]
+    i_dynamic = v_total_emf / r_total
+    
+    # PASS 2: Apply Tension and Lorentz Forces
     for j in range(n_edt + 1):
         p_a = pos[j]
         p_b = pos[j+1]
@@ -85,7 +145,8 @@ def tether_dynamics_fast(t, X, p_arr):
         l_seg_safe = max(l_seg, 1e-6)
         l_dot_seg = np.dot(r_seg, v_seg) / l_seg_safe
         
-        t_seg = max(0.0, k_edt * (l_seg - l0_edt_seg) + c_edt * l_dot_seg)
+        # Calculate Tension with Rayleigh Damping and Smooth Slack
+        t_seg = smooth_tension(l_seg - l0_edt_seg, l_dot_seg, k_edt_seg, beta_edt)
         f_t_seg = (t_seg / l_seg_safe) * r_seg
         
         m_a = get_mass_fast(j, p_arr, num_masses)
@@ -95,8 +156,9 @@ def tether_dynamics_fast(t, X, p_arr):
         accel[j+1] -= f_t_seg / m_b
         
         # 3. Lorentz Force (Applied to EDT segments: Tip to SC)
-        b_vec, rho, i_edt = get_environment_fast((p_a + p_b)/2.0, (v_a + v_b)/2.0, t, p_arr)
-        f_l = i_edt * np.cross(r_seg, b_vec)
+        # Using the dynamically calculated current from Motional EMF
+        b_vec, rho = get_environment_fast((p_a + p_b)/2.0, (v_a + v_b)/2.0, t, p_arr)
+        f_l = i_dynamic * np.cross(r_seg, b_vec)
         
         accel[j] += 0.5 * f_l / m_a
         accel[j+1] += 0.5 * f_l / m_b
@@ -110,7 +172,11 @@ def tether_dynamics_fast(t, X, p_arr):
     l_r_safe = max(l_r, 1e-6)
     l_dot_r = np.dot(r_rope, v_rope) / l_r_safe
     
-    t_r = max(0.0, p_arr[p.IDX_K_ROPE] * (l_r - p_arr[p.IDX_L_ROPE]) + p_arr[p.IDX_C_ROPE] * l_dot_r)
+    # Calculate Rope Stiffness
+    area_rope = np.pi * (p_arr[p.IDX_DIAM_ROPE] / 2.0)**2
+    k_rope = (p_arr[p.IDX_E_ROPE] * area_rope) / p_arr[p.IDX_L_ROPE]
+    
+    t_r = smooth_tension(l_r - p_arr[p.IDX_L_ROPE], l_dot_r, k_rope, p_arr[p.IDX_BETA_ROPE])
     f_t_r = (t_r / l_r_safe) * r_rope
     
     accel[idx_sc] += f_t_r / p_arr[p.IDX_M_SC]

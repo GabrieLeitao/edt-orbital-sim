@@ -25,10 +25,34 @@ def eci_to_lvlh(r_eci, v_eci, r_target_eci):
     
     # Cross-track (Opposite of Angular Momentum direction)
     h = np.cross(r_target_eci, v_eci)
-    u_y = -h / np.linalg.norm(h)
+    h_norm = np.linalg.norm(h)
     
-    # In-track (Completes the triad, points generally along velocity)
-    u_x = np.cross(u_y, u_z)
+    if h_norm < 1e-6: # Handle cases where orbit is near radial or zero angular momentum
+        # If h is zero, the cross-track direction is ill-defined.
+        # A common fallback is to align u_y with the Z axis if it's not the radial,
+        # or a default like [0,1,0] if u_z is [0,0,1].
+        # For simplicity, we'll use a default orthogonal vector if h is near zero.
+        # A robust fallback might depend on the specific scenario (e.g., landing).
+        # Here, we'll try to define a cross-track that's orthogonal to radial and in-track.
+        # If r_target is [x,y,z], and u_z is [-x,-y,-z]/norm(r), and velocity is also somewhat aligned
+        # it means h is zero.
+        # A simple fallback is to use a vector orthogonal to u_z.
+        # If u_z is along Z-axis, u_y can be [1,0,0] or [0,1,0].
+        # Let's try a default cross-track that's orthogonal to u_z and attempt to be 'in-track' conceptually.
+        # A simple and generally safe choice is to find a vector not parallel to u_z.
+        # If u_z is [0,0,1], then [1,0,0] is orthogonal.
+        # If u_z is [0,1,0], then [1,0,0] is orthogonal.
+        # We can define u_y as [0,0,1] if u_z is not [0,0,1], else [1,0,0].
+        if np.allclose(u_z, [0,0,1]):
+            u_y = np.array([1.0, 0.0, 0.0])
+        else:
+            u_y = np.array([0.0, 0.0, 1.0])
+        # Ensure u_x is still orthogonal
+        u_x = np.cross(u_y, u_z)
+    else:
+        u_y = -h / h_norm
+        # In-track (Completes the triad, points generally along velocity)
+        u_x = np.cross(u_y, u_z)
     
     # 2. Rotation matrix [ECI -> LVLH]
     R = np.vstack((u_x, u_y, u_z))

@@ -39,9 +39,13 @@ def setup_initial_state(params):
     vel[0] = v_target - np.array([0.0, omega * dist_tip, 0.0])
     
     # EDT beads (Index 1 to N_edt)
-    L0_seg = params.L_edt / params.N_edt
+    # Total segments in EDT chain = N_edt + 1
+    L0_seg = params.L_edt / (params.N_edt + 1)
     for i in range(1, params.N_edt + 1):
-        dist = params.L_rope + (params.N_edt - i + 1) * L0_seg
+        # Position is distance from target
+        # SC is at L_rope, so first bead is L_rope + L0_seg
+        # N_edt-th bead is L_rope + N_edt * L0_seg
+        dist = params.L_rope + (params.N_edt + 1 - i) * L0_seg
         pos[i] = r_target - np.array([dist, 0.0, 0.0])
         vel[i] = v_target - np.array([0.0, omega * dist, 0.0])
         
@@ -58,7 +62,7 @@ def setup_initial_state(params):
     X0[3*num_masses:] = vel.flatten()
     return X0
 
-def integrate_system(X0, t_span, p_arr, desc, rtol=1e-4, atol=1e-6):
+def integrate_system(X0, t_span, p_arr, desc, rtol=1e-7, atol=1e-9):
     """
     Driver for the ODE solver with real-time progress feedback.
     """
