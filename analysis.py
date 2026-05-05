@@ -5,6 +5,7 @@ import os
 from numba import njit
 from dynamics import get_mass_fast
 import params as p
+import yaml
 
 @njit
 def calculate_total_energy_fast(p_frame, v_frame, masses, p_arr):
@@ -121,15 +122,12 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params):
         
     return energy, rope_L, edt_L, pitch
 
-def save_csv(filename, t_vals, telemetry_val, telemetry_name, X_vals, params):
+def save_csv(filename, run_folder, t_vals, telemetry_val, telemetry_name, X_vals, params):
     """
     Saves simulation results to a standardized CSV format in the results/ directory.
     Standardized columns facilitate cross-analysis between mission and validation runs.
     """
-    results_dir = "results"
-    if not os.path.exists(results_dir):
-        os.makedirs(results_dir)
-        
+
     num_masses = params.num_masses
     cols = ['time_s', telemetry_name]
     
@@ -149,6 +147,39 @@ def save_csv(filename, t_vals, telemetry_val, telemetry_name, X_vals, params):
     if "km" in telemetry_name and np.max(telemetry_val) > 1e6:
         telemetry_val = telemetry_val / 1000.0
         
+    filepath = os.path.join(run_folder, filename)
+    
     data_out = np.hstack([t_vals.reshape(-1, 1), telemetry_val.reshape(-1, 1), interleaved_data])
-    pd.DataFrame(data_out, columns=cols).to_csv(os.path.join(results_dir, filename), index=False)
-    print(f"Data saved to {os.path.join(results_dir, filename)}")
+    pd.DataFrame(data_out, columns=cols).to_csv(filepath, index=False)
+    print(f"Data saved to {filepath}")
+
+def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com, params):
+    """
+    Saves simulation parameters and key results to a YAML file for easy reference.
+    This complements the CSV data with human-readable metadata and summary statistics.
+    """
+    run_id = os.path.basename(os.path.normpath(run_folder))
+
+    initial_sma = sma_com[0]
+    final_sma = sma_com[-1]
+    sma_drop = initial_sma - final_sma
+    
+    output_data = {
+        "metadata": {
+            "run_id": run_id,
+            "description": "Electrodynamic Tether Orbital Decay Simulation"
+        },
+        "parameters": params.to_dict(),
+        "results": {
+            "com_sma_initial_m": float(initial_sma),
+            "com_sma_final_m": float(final_sma),
+            "com_sma_drop_m": float(sma_drop),
+            "simulation_time_s": float(t_vals[-1] - t_vals[0])
+        }
+    }
+    filepath = os.path.join(run_folder, filename)
+
+    with open(filepath, 'w') as file:
+        yaml.dump(output_data, file, default_flow_style=False, sort_keys=False)
+
+    print(f"Configuration parameters and results summary saved to {filepath}")

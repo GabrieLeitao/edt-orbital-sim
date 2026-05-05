@@ -4,9 +4,10 @@ import numpy as np
 
 from params import SimulationParams
 from engine import setup_initial_state, integrate_system
-from analysis import calculate_com_sma, save_csv
+from analysis import calculate_com_sma, save_csv, save_config_params_results_yaml
+from utils import get_results_folder
 
-def plot_simulation(t_vals, sma_com, X_vals, params):
+def plot_simulation(t_vals, sma_com, X_vals, params, run_folder):
     """Generate deorbiting plots"""
     plt.figure(figsize=(12, 5))
     
@@ -22,7 +23,7 @@ def plot_simulation(t_vals, sma_com, X_vals, params):
     plt.gca().set_aspect('equal'); plt.grid(True); plt.title('Final Tether Configuration')
     
     plt.tight_layout()
-    plt.savefig(os.path.join("results", "simulation_plots.png"))
+    plt.savefig(os.path.join(run_folder, "simulation_plots.png"))
     plt.show()
 
 def run_mission():
@@ -35,13 +36,18 @@ def run_mission():
     
     # 2. Propagate
     sol = integrate_system(X0, (0, 5400), p_arr, "Propagating Deorbit")
+
+    run_name = f"run_{len(os.listdir('results'))+1:03d}"
+    run_folder = get_results_folder(run_name)
     
     # 3. Analyze & Export
     sma_com = calculate_com_sma(sol.t, sol.y.T, p_arr, params)
-    save_csv("simulation_results.csv", sol.t, sma_com, "sma_com_km", sol.y.T, params)
-    
+    save_csv("simulation_results.csv", run_folder, sol.t, sma_com, "sma_com_km", sol.y.T, params)
+
+    save_config_params_results_yaml("config_params_results.yaml", run_folder, sol.t, sma_com, params)
+
     # 4. Visualize
-    plot_simulation(sol.t, sma_com, sol.y.T, params)
+    plot_simulation(sol.t, sma_com, sol.y.T, params, run_folder)
 
 if __name__ == "__main__":
     run_mission()

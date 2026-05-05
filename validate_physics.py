@@ -5,8 +5,9 @@ import numpy as np
 from params import SimulationParams
 from engine import setup_initial_state, integrate_system
 from analysis import post_process_telemetry, save_csv
+from utils import get_results_folder
 
-def plot_validation(t_vals, energy, rope, pitch, edt, params):
+def plot_validation(run_folder, t_vals, energy, rope, pitch, edt, params):
     """Generate structural validation plots"""
     rel_energy_error = (energy - energy[0]) / np.abs(energy[0])
     
@@ -24,7 +25,7 @@ def plot_validation(t_vals, energy, rope, pitch, edt, params):
     plt.plot(t_vals, edt); plt.axhline(y=params.L_edt, color='r', ls='--'); plt.title("EDT Integrity [m]")
     
     plt.tight_layout()
-    plt.savefig(os.path.join("results", "validation_plots.png"))
+    plt.savefig(os.path.join(run_folder, "validation_plots.png"))
     plt.show()
 
 def run_validation():
@@ -40,13 +41,15 @@ def run_validation():
     # 2. Propagate
     sol = integrate_system(X0, (0, 5400), p_arr, "Validating Physics", rtol=1e-7, atol=1e-9)
     
+    run_folder = get_results_folder("validation")
+
     # 3. Analyze & Export
     energy, rope, edt, pitch = post_process_telemetry(sol.t, sol.y.T, p_arr, params)
     rel_energy_error = (energy - energy[0]) / np.abs(energy[0])
-    save_csv("validation_results.csv", sol.t, rel_energy_error, "rel_energy_error", sol.y.T, params)
+    save_csv("validation_results.csv", run_folder, sol.t, rel_energy_error, "rel_energy_error", sol.y.T, params)
     
     # 4. Visualize
-    plot_validation(sol.t, energy, rope, pitch, edt, params)
+    plot_validation(run_folder, sol.t, energy, rope, pitch, edt, params)
     
     print(f"\n--- Validation Report ---\n1. Energy Stability: {np.max(np.abs(rel_energy_error)):.2e}")
     print(f"2. Structure Check: {'Stable' if np.max(rope) < params.L_rope * 1.1 else 'UNSTABLE'}")

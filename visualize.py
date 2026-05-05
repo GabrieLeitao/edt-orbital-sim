@@ -5,17 +5,69 @@ from matplotlib.widgets import Slider, Button
 from mpl_toolkits.mplot3d import Axes3D
 import os
 from frames import eci_to_lvlh
+import yaml
+from params import SimulationParams
+import questionary
+
+def select_simulation_folder():
+    results_root = "results"
+    target_file = "simulation_results.csv"
+    
+    if not os.path.exists(results_root):
+        print(f"Error: Directory '{results_root}' not found.")
+        return None
+
+    # Filter folders
+    sim_folders = [f for f in os.listdir(results_root) 
+                   if os.path.isdir(os.path.join(results_root, f)) 
+                   and target_file in os.listdir(os.path.join(results_root, f))]
+    sim_folders.sort(reverse=True)
+
+    if not sim_folders:
+        print(f"No folders containing '{target_file}' found.")
+        return None
+
+    choices = sim_folders
+    answer = questionary.select(
+        "Select a simulation run to visualize:",
+        choices=choices
+    ).ask()
+    
+    return os.path.join(results_root, answer) if answer else None
 
 def interactive_visualization(csv_path=os.path.join("results", "simulation_results.csv")):
-    # 1. Load Data
-    val_path = os.path.join("results", "validation_results.csv")
-    if not os.path.exists(csv_path) and not os.path.exists(val_path):
-        print(f"Error: Neither {csv_path} nor {val_path} found. Run simulate.py or validate_physics.py first.")
+    # 1. Select the subfolder
+    sim_folder = select_simulation_folder()
+    if not sim_folder:
         return
 
-    actual_path = csv_path if os.path.exists(csv_path) else val_path
-    print(f"Loading data from {actual_path}...")
-    df = pd.read_csv(actual_path)
+    # 2. Hardcoded path to the simulation data
+    csv_path = os.path.join(sim_folder, "simulation_results.csv")
+
+    # 3. Load the data
+    print(f"Loading data from {csv_path}...")
+    df = pd.read_csv(csv_path)
+
+    # 4. Optional: Load the parameters used for this specific run
+    yaml_files = [f for f in os.listdir(sim_folder) if f.endswith(('.yaml', '.yml'))]
+    
+    if yaml_files:
+        # Take the first YAML file found in the folder
+        yaml_path = os.path.join(sim_folder, yaml_files[0])
+        with open(yaml_path, 'r') as f:
+            config = yaml.safe_load(f)
+            
+        # Safely extract the run_id we added earlier
+        run_id = config.get("metadata", {}).get("run_id", "Unknown Run ID")
+        desc = config.get("metadata", {}).get("description", "N/A")
+        print(f"Config loaded: {yaml_files[0]}")
+        print(f"Run ID: {run_id} | {desc}")
+    else:
+        print("No YAML configuration file found in this folder.")
+        config = None
+
+    params = SimulationParams.from_yaml(yaml_path)
+    re = params.R_e
     
     pos_cols = [c for c in df.columns if '_rx_m' in c]
     vel_cols = [c for c in df.columns if '_vx_ms' in c]
@@ -78,11 +130,20 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
     # Current System Marker
     point_orbit, = ax_orbit.plot([], [], [], 'ro', markersize=6, label="Current Pos")
     
-    # Earth Wireframe
-    u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
-    re = 6378137.0
-    ax_orbit.plot_wireframe(re*np.cos(u)*np.sin(v), re*np.sin(u)*np.sin(v), re*np.cos(v), color="blue", alpha=0.1)
-    ax_orbit.legend()
+    # Earth Visualization
+    u, v = np.mgrid[0:2*np.pi:30j, 0:np.pi:15j]
+    ax_orbit.plot_wireframe(re*np.cos(u)*np.sin(v), re*np.sin(u)*np.sin(v), re*np.cos(v), color="blue", alpha=0.05)
+    
+    # Equator Line
+    theta = np.linspace(0, 2*np.pi, 100)
+    ax_orbit.plot(re*np.cos(theta), re*np.sin(theta), 0, color="blue", lw=2, alpha=0.3, label="Equator")
+    
+    # ECI Reference Frame Axes
+    ax_orbit.set_xlabel("X (ECI) [m]")
+    ax_orbit.set_ylabel("Y (ECI) [m]")
+    ax_orbit.set_zlabel("Z (ECI) [m]")
+    ax_orbit.view_init(elev=20, azim=45) # Initial view to see inclination
+    ax_orbit.legend(loc='upper right', fontsize='small')
 
     # Sat + Target Elements (2D)
     # Horizontal: In-Track (X), Vertical: Radial (Z)
@@ -152,8 +213,8 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         marker_sc_st.set_data([it[sc_idx]], [rd[sc_idx]])
         
         # Zoom on the 50m rope. Target is at (0,0) in LVLH.
-        ax_sat_target.set_xlim([-100, 100])
-        ax_sat_target.set_ylim([100, -100]) # Inverted: Down is towards Earth (Positive RD)
+        ax_sat_target.set_xlim([-80, 80])
+        ax_sat_target.set_ylim([80, -80]) # Inverted: Down is towards Earth (Positive RD)
 
         # 4. EDT Behavior View
         line_edt_full.set_data(it, rd)
@@ -162,8 +223,8 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         marker_target_edt.set_data([it[target_idx]], [rd[target_idx]])
         
         # Zoom on the 2km tether
-        ax_edt.set_xlim([-2500, 2500])
-        ax_edt.set_ylim([2500, -2500]) # Inverted: Down is towards Earth (Positive RD)
+        ax_edt.set_xlim([-750, 750])
+        ax_edt.set_ylim([750, -750]) # Inverted: Down is towards Earth (Positive RD)
 
         # 5. LVLH 3D View
         line_lvlh_3d.set_data(it, ct)
@@ -173,9 +234,9 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         marker_sc_3d.set_data([it[sc_idx]], [ct[sc_idx]])
         marker_sc_3d.set_3d_properties([rd[sc_idx]])
         
-        ax_lvlh_3d.set_xlim3d([-2500, 2500])
-        ax_lvlh_3d.set_ylim3d([-2500, 2500])
-        ax_lvlh_3d.set_zlim3d([-2500, 2500])
+        ax_lvlh_3d.set_xlim3d([-750, 750])
+        ax_lvlh_3d.set_ylim3d([-750, 750])
+        ax_lvlh_3d.set_zlim3d([750, -750])
         ax_lvlh_3d.set_xlabel("In-Track [m]")
         ax_lvlh_3d.set_ylabel("Cross-Track [m]")
         ax_lvlh_3d.set_zlabel("Radial [m]")
