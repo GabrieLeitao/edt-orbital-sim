@@ -19,27 +19,27 @@ class SimulationParams:
         
         # Derived Rope Damping (Targeting zeta = 0.5 for the rope)
         area_rope = np.pi * (self.diam_rope / 2.0)**2
-        k_rope = (self.E_rope * area_rope) / self.L_rope
+        self.k_rope = (self.E_rope * area_rope) / self.L_rope
         # Natural frequency w = sqrt(k/m). Using SC mass as reference.
-        w_rope = np.sqrt(k_rope / self.m_sc)
+        w_rope = np.sqrt(self.k_rope / self.m_sc)
         # c = beta * k = 2 * zeta * sqrt(k*m) => beta = 2 * zeta / w
-        self.beta_rope = 2.0 * 0.5 / w_rope 
+        self.beta_rope = 2.0 * 0.5 / w_rope
 
         # 4. EDT Properties (SC-Tip)
         self.L_edt = 200.0            # Total EDT length [m]
         self.N_edt = 5#10               # Number of segments
-        self.E_edt = 50e9             # Young's Modulus (Aluminum) [Pa]
+        self.E_edt = 70e9             # Young's Modulus (Aluminum) [Pa]
         self.diam_edt = 0.0015        # 1.5mm wire
         self.rho_aluminum = 2700.0    # Aluminum density [kg/m^3]
         
         # Scientific Scaling: Derive mass from geometry
-        area_edt = np.pi * (self.diam_edt / 2.0)**2
-        self.m_edt_total = self.L_edt * area_edt * self.rho_aluminum
+        self.area_edt = np.pi * (self.diam_edt / 2.0)**2
+        self.m_edt_total = self.L_edt * self.area_edt * self.rho_aluminum
         
         # Derived EDT Damping (Targeting zeta = 0.7 for critical damping of 'snaps')
         l_seg = self.L_edt / (self.N_edt + 1)
         m_seg = self.m_edt_total / (self.N_edt + 1)
-        k_seg = (self.E_edt * area_edt) / l_seg
+        k_seg = (self.E_edt * self.area_edt) / l_seg
         w_seg = np.sqrt(k_seg / m_seg)
         self.beta_edt = 2.0 * 0.7 / w_seg
         
@@ -47,6 +47,9 @@ class SimulationParams:
         self.rho_al_res = 2.65e-8     # Aluminum resistivity [Ohm*m]
         self.z_plasma = 100.0         # Plasma contactor impedance [Ohm]
         self.r_load = 500.0           # Load resistance [Ohm]
+
+        self.r_wire = self.rho_aluminum * self.L_edt / self.area_edt # resistence of the EDT wire
+        self.r_total = self.r_wire + self.z_plasma + self.r_load
 
         # 5. Environment Assumptions
         self.Cd = 2.2                 # Drag coefficient
@@ -79,6 +82,7 @@ class SimulationParams:
                 "E_rope": float(self.E_rope),
                 "diam_rope": float(self.diam_rope),
                 "beta_rope": float(self.beta_rope),
+                "k_rope": float(self.k_rope),
             },
             "edt_properties": {
                 "L_edt": float(self.L_edt),
@@ -86,6 +90,7 @@ class SimulationParams:
                 "E_edt": float(self.E_edt),
                 "diam_edt": float(self.diam_edt),
                 "rho_aluminum": float(self.rho_aluminum),
+                "area_edt": float(self.area_edt),
                 "m_edt_total": float(self.m_edt_total),
                 "beta_edt": float(self.beta_edt),
             },
@@ -93,6 +98,8 @@ class SimulationParams:
                 "rho_al_res": float(self.rho_al_res),
                 "z_plasma": float(self.z_plasma),
                 "r_load": float(self.r_load),
+                "r_wire": float(self.r_wire),
+                "r_total": float(self.r_total),
             },
             "environment_assumptions": {
                 "Cd": float(self.Cd),
@@ -137,12 +144,13 @@ class SimulationParams:
         obj.m_sc = masses.get("m_sc", obj.m_sc)
         obj.m_tip = masses.get("m_tip", obj.m_tip)
         
-        # 3. Tether Properties
+        # 3. Rope Properties
         tether = p_dict.get("tether_properties", {})
         obj.L_rope = tether.get("L_rope", obj.L_rope)
         obj.E_rope = tether.get("E_rope", obj.E_rope)
         obj.diam_rope = tether.get("diam_rope", obj.diam_rope)
         obj.beta_rope = tether.get("beta_rope", obj.beta_rope)
+        obj.k_rope = (obj.E_rope * np.pi * (obj.diam_rope / 2.0)**2) / obj.L_rope # Recalculate k_rope based on E and L
         
         # 4. EDT Properties
         edt = p_dict.get("edt_properties", {})
@@ -153,13 +161,16 @@ class SimulationParams:
         obj.rho_aluminum = edt.get("rho_aluminum", obj.rho_aluminum)
         obj.m_edt_total = edt.get("m_edt_total", obj.m_edt_total)
         obj.beta_edt = edt.get("beta_edt", obj.beta_edt)
-        
+        obj.area_edt = np.pi * (obj.diam_edt / 2.0)**2 # Recalculate area_edt based on diam_edt
+
         # 5. Electrical Properties
         elec = p_dict.get("electrical_properties", {})
         obj.rho_al_res = elec.get("rho_al_res", obj.rho_al_res)
         obj.z_plasma = elec.get("z_plasma", obj.z_plasma)
         obj.r_load = elec.get("r_load", obj.r_load)
-        
+        obj.r_wire = elec.get("r_wire", obj.r_wire)
+        obj.r_total = elec.get("r_total", obj.r_total)
+
         # 6. Environment Assumptions
         env = p_dict.get("environment_assumptions", {})
         obj.Cd = env.get("Cd", obj.Cd)
@@ -178,10 +189,10 @@ class SimulationParams:
         return np.array([
             self.mu, self.R_e, self.J2,
             self.m_target, self.m_sc, self.m_tip,
-            self.L_rope, self.E_rope, self.diam_rope, self.beta_rope,
+            self.L_rope, self.E_rope, self.diam_rope, self.k_rope, self.beta_rope,
             self.L_edt, float(self.N_edt), self.m_edt_total,
-            self.E_edt, self.diam_edt, self.beta_edt,
-            self.rho_al_res, self.z_plasma, self.r_load, self.Cd, self.Area_sc
+            self.E_edt, self.diam_edt, self.area_edt, self.beta_edt,
+            self.rho_al_res, self.z_plasma, self.r_load, self.r_wire, self.r_total, self.Cd, self.Area_sc
         ], dtype=np.float64)
 
 # Indices for the flat array
@@ -194,15 +205,19 @@ IDX_M_TIP = 5
 IDX_L_ROPE = 6
 IDX_E_ROPE = 7
 IDX_DIAM_ROPE = 8
-IDX_BETA_ROPE = 9
-IDX_L_EDT = 10
-IDX_N_EDT = 11
-IDX_M_EDT_TOTAL = 12
-IDX_E_EDT = 13
-IDX_DIAM_EDT = 14
-IDX_BETA_EDT = 15
-IDX_RHO_AL = 16
-IDX_Z_PLASMA = 17
-IDX_R_LOAD = 18
-IDX_CD = 19
-IDX_AREA = 20
+IDX_K_ROPE = 9
+IDX_BETA_ROPE = 10
+IDX_L_EDT = 11
+IDX_N_EDT = 12
+IDX_M_EDT_TOTAL = 13
+IDX_E_EDT = 14
+IDX_DIAM_EDT = 15
+IDX_AREA_EDT = 16
+IDX_BETA_EDT = 17
+IDX_RHO_AL = 18
+IDX_Z_PLASMA = 19
+IDX_R_LOAD = 20
+IDX_R_WIRE = 21
+IDX_R_TOTAL = 22
+IDX_CD = 23
+IDX_AREA = 24

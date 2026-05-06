@@ -97,7 +97,7 @@ def load_checkpoint(run_folder):
         return float(data['t']), data['X'], data['p_arr'], p_hash, h_t, h_X
     return None, None, None, None, None, None
 
-def integrate_system(X0, t_span, p_arr, desc, rtol=1e-7, atol=1e-9, pbar=None, sampling_hz=1.0):
+def integrate_system(X0, t_span, p_arr, desc, rtol=1e-6, atol=1e-8, pbar=None, sampling_hz=1.0):
     """
     Driver for the ODE solver with real-time progress feedback.
     Performance: Uses t_eval to downsample output, preventing memory bloat from micro-steps.

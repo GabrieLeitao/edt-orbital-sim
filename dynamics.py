@@ -39,7 +39,7 @@ def smooth_tension(dl, dl_dot, k, beta):
     # Smooth transition: 
     # Use a sigmoid-like scaling to prevent the 'hammer blow' of sudden tension
     # Transition width is ~10cm (coefficient 50.0) for numerical stability
-    scale = 1.0 / (1.0 + np.exp(-50.0 * dl))
+    scale = 1.0 / (1.0 + np.exp(-25.0 * dl))
 
     tension = (f_elastic + f_damping) * scale
 
@@ -64,9 +64,13 @@ def tether_dynamics_fast(t, X, p_arr):
     dX = np.zeros_like(X)
     
     # Extract positions and velocities
-    pos = X[:3*num_masses].reshape((num_masses, 3))
-    vel = X[3*num_masses:].reshape((num_masses, 3))
-    
+    # pos = X[:3*num_masses].reshape((num_masses, 3))
+    # vel = X[3*num_masses:].reshape((num_masses, 3))
+    X_slice = np.ascontiguousarray(X[:3*num_masses])
+    pos = X_slice.reshape((num_masses, 3))
+    X_slice = np.ascontiguousarray(X[3*num_masses:])
+    vel = X_slice.reshape((num_masses, 3))
+
     accel = np.zeros((num_masses, 3))
     
     # 1. Gravity, J2 & Atmospheric Drag
@@ -76,6 +80,7 @@ def tether_dynamics_fast(t, X, p_arr):
     cd = p_arr[p.IDX_CD]
     area = p_arr[p.IDX_AREA]
     diam_edt = p_arr[p.IDX_DIAM_EDT]
+    area_edt = p_arr[p.IDX_AREA_EDT]
     l0_edt_seg = p_arr[p.IDX_L_EDT] / (n_edt + 1)
     
     for i in range(num_masses):
@@ -117,7 +122,6 @@ def tether_dynamics_fast(t, X, p_arr):
 
     # 2. Internal Forces (Tension) - EDT (SC-Tip)
     # k = E * A / L_seg
-    area_edt = np.pi * (p_arr[p.IDX_DIAM_EDT] / 2.0)**2
     k_edt_seg = (p_arr[p.IDX_E_EDT] * area_edt) / l0_edt_seg
     beta_edt = p_arr[p.IDX_BETA_EDT]
     
@@ -141,9 +145,7 @@ def tether_dynamics_fast(t, X, p_arr):
         
     # Calculate Dynamic Current: I = V_emf / R_total
     # R_total = R_wire + Z_plasma + R_load
-    r_wire = p_arr[p.IDX_RHO_AL] * p_arr[p.IDX_L_EDT] / area_edt
-    r_total = r_wire + p_arr[p.IDX_Z_PLASMA] + p_arr[p.IDX_R_LOAD]
-    i_dynamic = v_total_emf / r_total
+    i_dynamic = v_total_emf / p_arr[p.IDX_R_TOTAL]
     
     # PASS 2: Apply Tension and Lorentz Forces
     for j in range(n_edt + 1):
@@ -186,10 +188,8 @@ def tether_dynamics_fast(t, X, p_arr):
     l_dot_r = np.dot(r_rope, v_rope) / l_r_safe
     
     # Calculate Rope Stiffness
-    area_rope = np.pi * (p_arr[p.IDX_DIAM_ROPE] / 2.0)**2
-    k_rope = (p_arr[p.IDX_E_ROPE] * area_rope) / p_arr[p.IDX_L_ROPE]
     
-    t_r = smooth_tension(l_r - p_arr[p.IDX_L_ROPE], l_dot_r, k_rope, p_arr[p.IDX_BETA_ROPE])
+    t_r = smooth_tension(l_r - p_arr[p.IDX_L_ROPE], l_dot_r, p_arr[p.IDX_K_ROPE], p_arr[p.IDX_BETA_ROPE])
     f_t_r = (t_r / l_r_safe) * r_rope
     
     accel[idx_sc] += f_t_r / p_arr[p.IDX_M_SC]
