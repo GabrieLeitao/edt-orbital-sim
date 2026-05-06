@@ -36,7 +36,7 @@ This engine is designed as a **high-fidelity multi-body dynamics simulator** for
 - **For Tether Dynamics Research:** Excellent. The multi-body coupling, Rayleigh damping, and smooth-slack logic are state-of-the-art for studying libration, stability, and deployment.
 - **For Precision Navigation/POD:** Not suitable. The environmental errors (Dipole/Static Drag) exceed the requirements for Precise Orbit Determination.
 
-### Technical Note: The "Snapping" & "Slingshot" Phenomenon
+### Note: The "Snapping" & "Slingshot" Phenomenon
 If you observe the EDT "snapping" or "slingshotting" the spacecraft:
 1. **Libration Instability:** The Lorentz force acts as a non-conservative drag. If the current is too high, the tether swings ("librates") away from the vertical. If it swings past the stable limit, it may go slack and then violently "whip" back when tension returns.
 2. **Numerical Stiffness:** The aluminum EDT is extremely stiff ($E = 70$ GPa). Small displacements cause massive forces. The `smooth_tension` function in `dynamics.py` mitigates this, but extreme maneuvers may still trigger sharp transients.
@@ -69,17 +69,6 @@ Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method. The solv
    ```
    *Interactive scrubbing with inverted Radial axis (Down = Earth) for standard physics interpretation.*
 
-## Important Note on Orbital Decay Interpretation
-
-### 1. J2 Osculating SMA vs. Mean SMA
-Users may observe large oscillations in the Semi-Major Axis (SMA) plot (e.g., $\pm$ 15–20 km per orbit). 
-- **This is not a simulation error.** It is a physical artifact of the **J2 perturbation** (Earth's oblateness) on the **osculating orbital elements**. 
-- In a non-spherical gravity field, the mapping from position/velocity to a Keplerian ellipse changes constantly as the system moves.
-- The **true deorbiting trend** is the much slower downward slope of the *mean* of these oscillations over several orbits.
-
-### 2. Physical Stability (Libration)
-- The Lorentz force acts as a "sideways" force on the tether. If the current is too high (e.g., > 1.0A for this configuration), the tether may swing significantly away from the radial vertical (libration).
-- If the libration becomes extreme, the tether may go slack and "whip" around. The default current has been set to **0.5A** to ensure a stable, gravity-gradient aligned deorbiting process.
 
 ## Assumptions
 - Centered Dipole magnetic field (Z-aligned).
