@@ -13,6 +13,8 @@ from engine import setup_initial_state, integrate_system, save_checkpoint, load_
 from analysis import calculate_com_sma, save_csv, save_config_params_results_yaml
 from utils import get_results_folder
 
+from stability import run_preflight_stability_check, check_state_sanity
+
 def plot_simulation(t_vals, sma_com, X_vals, params, run_folder):
     """Generate deorbiting plots"""
     plt.figure(figsize=(12, 5))
@@ -117,7 +119,7 @@ def initialize_new_mission():
     print(f"Starting new simulation: {run_name}")
     return run_folder, 0.0, X0, params, [], []
 
-def run_mission(skip_checkpoint=False):
+def run_mission(skip_checkpoint=False, skip_test=False):
     """Main Orchestrator following KSRP principles."""
     # 1. Setup Phase
     rf, t_start, X0, params, all_t, all_X = handle_mission_resumption()
@@ -125,12 +127,20 @@ def run_mission(skip_checkpoint=False):
         rf, t_start, X0, params, all_t, all_X = initialize_new_mission()
 
     p_arr = params.to_numba_params()
-    t_end = 700
-    step_size = 10.0
+    
+    # 2. Stability Guard Phase (Pre-flight)
+    if t_start == 0.0 and not skip_test:
+        is_stable, msg = run_preflight_stability_check(X0, p_arr, params)
+        if not is_stable:
+            print(f"CRITICAL: Simulation aborted during pre-flight. {msg}")
+            return
+
+    t_end = 5400
+    step_size = 500.0
     t_curr, X_curr = t_start, X0
     real_start = time.time()
     
-    # 2. Execution Phase (Segmented Integration Loop)
+    # 3. Execution Phase (Segmented Integration Loop)
     with tqdm(total=int(t_end), initial=int(t_start), unit='s', desc="Mission Progress") as pbar:
         while t_curr < t_end:
             t_next = min(t_curr + step_size, t_end)
@@ -142,6 +152,12 @@ def run_mission(skip_checkpoint=False):
             seg_t = sol.t
             seg_X = sol.y.T
             
+            # Mid-loop Health Check
+            is_sane, reason = check_state_sanity(seg_X[-1], params)
+            if not is_sane:
+                print(f"\nCRITICAL: Simulation became unstable at t={t_curr:.1f}s. {reason}")
+                break
+
             all_t.extend(seg_t); all_X.extend(seg_X)
             t_curr, X_curr = seg_t[-1], seg_X[-1]
             
@@ -170,8 +186,10 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Multi-body EDT Simulation with Checkpointing")
     parser.add_argument("--no-checkpoint", action="store_true", 
                         help="Skip periodic binary checkpoints and intermediate CSV saves for maximum performance.")
+    parser.add_argument("--no-test", action="store_true", 
+                        help="Skip validation and pre test for numerical stability.")
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_mission(skip_checkpoint=args.no_checkpoint)
+    run_mission(skip_checkpoint=args.no_checkpoint, skip_test=args.no_test)

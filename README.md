@@ -71,10 +71,15 @@ pip install -r requirements.txt
    ```
    *Propagates the full deorbiting mission with active Lorentz forces and drag. Supports periodic binary checkpointing for lossless resume.*
 
-   **Performance Tuning:**
+   **No checkpoint:**
    To skip periodic checkpointing and intermediate CSV saves (maximizing execution speed), use:
    ```bash
    python simulate.py --no-checkpoint
+   ```
+   **No pre validation test:**
+   To skip pre validation checks that the model stability, and probability of EDT slingshoting, use:
+   ```bash
+   python simulate.py --no-test
    ```
 3. **Visualize**:
    ```bash
