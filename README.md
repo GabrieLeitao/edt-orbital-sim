@@ -52,7 +52,14 @@ Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method. The solv
 - `analysis.py`: Telemetry engine for SMA decay, energy conservation, and libration analysis.
 - `visualize.py`: Interactive 2x2 dashboard with ECI, Relative In-Plane (In-Track vs Radial), and LVLH 3D views.
 
-## How to Run
+## Building and Running
+
+### Prerequisites
+Install dependencies using pip:
+```bash
+pip install -r requirements.txt
+```
+
 1. **Validate Physics**:
    ```bash
    python validate_physics.py
@@ -62,7 +69,13 @@ Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method. The solv
    ```bash
    python simulate.py
    ```
-   *Propagates the full deorbiting mission with active Lorentz forces and drag.*
+   *Propagates the full deorbiting mission with active Lorentz forces and drag. Supports periodic binary checkpointing for lossless resume.*
+
+   **Performance Tuning:**
+   To skip periodic checkpointing and intermediate CSV saves (maximizing execution speed), use:
+   ```bash
+   python simulate.py --no-checkpoint
+   ```
 3. **Visualize**:
    ```bash
    python visualize.py

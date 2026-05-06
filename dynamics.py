@@ -30,14 +30,27 @@ def smooth_tension(dl, dl_dot, k, beta):
     """
     # Pure linear tension + proportional damping
     # c = beta * k
-    f_total = k * dl + (beta * k) * dl_dot
+    # 2. Calculate Elastic Force
+    f_elastic = k * dl
+    
+    # 3. Calculate Damping Force
+    f_damping = (beta * k) * dl_dot
     
     # Smooth transition: 
     # Use a sigmoid-like scaling to prevent the 'hammer blow' of sudden tension
     # Transition width is ~10cm (coefficient 50.0) for numerical stability
-    scale = 1.0 / (1.0 + np.exp(-50.0 * dl)) 
+    scale = 1.0 / (1.0 + np.exp(-50.0 * dl))
+
+    tension = (f_elastic + f_damping) * scale
+
+    if dl > 0:
+        max_allowed_damping = abs(f_elastic) * 5.0 # Allow some overshoot, but not infinite
+        if abs(f_damping * scale) > max_allowed_damping:
+            # Re-calculate tension with capped damping
+            d_sign = 1.0 if f_damping > 0 else -1.0
+            tension = (f_elastic + (d_sign * max_allowed_damping)) * scale
     
-    return max(0.0, f_total * scale)
+    return max(0.0, tension)
 
 @njit
 def tether_dynamics_fast(t, X, p_arr):

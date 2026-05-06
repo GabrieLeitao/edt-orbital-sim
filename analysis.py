@@ -6,6 +6,7 @@ from numba import njit
 from dynamics import get_mass_fast
 import params as p
 import yaml
+import hashlib
 
 @njit
 def calculate_total_energy_fast(p_frame, v_frame, masses, p_arr):
@@ -122,64 +123,95 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params):
         
     return energy, rope_L, edt_L, pitch
 
-def save_csv(filename, run_folder, t_vals, telemetry_val, telemetry_name, X_vals, params):
+def save_csv(filename, run_folder, t_vals, telemetry_val, telemetry_name, X_vals, params, silent=False, append=False):
     """
     Saves simulation results to a standardized CSV format in the results/ directory.
-    Standardized columns facilitate cross-analysis between mission and validation runs.
+    Supports 'append' mode for memory-efficient segmented writes.
     """
-
     num_masses = params.num_masses
     cols = ['time_s', telemetry_name]
-    
-    # Reshape X_vals to facilitate interleaving
-    pos_data = X_vals[:, :3*num_masses].reshape(-1, num_masses, 3)
-    vel_data = X_vals[:, 3*num_masses:].reshape(-1, num_masses, 3)
-    
-    interleaved_data = np.zeros((len(t_vals), 6*num_masses))
+
+    # Pre-calculate column names (only used if writing new file or header)
     for i in range(num_masses):
         label = f"m{i}_target" if i == params.N_edt + 2 else (f"m{i}_sc" if i == params.N_edt + 1 else (f"m{i}_tip" if i == 0 else f"m{i}_bead"))
         cols += [f'{label}_rx_m', f'{label}_ry_m', f'{label}_rz_m', f'{label}_vx_ms', f'{label}_vy_ms', f'{label}_vz_ms']
-        
+
+    # Reshape X_vals to facilitate interleaving
+    pos_data = X_vals[:, :3*num_masses].reshape(-1, num_masses, 3)
+    vel_data = X_vals[:, 3*num_masses:].reshape(-1, num_masses, 3)
+
+    interleaved_data = np.zeros((len(t_vals), 6*num_masses))
+    for i in range(num_masses):
         interleaved_data[:, 6*i:6*i+3] = pos_data[:, i, :]
         interleaved_data[:, 6*i+3:6*i+6] = vel_data[:, i, :]
-    
-    # Unit correction: ensure telemetry matches label
+
+    # Unit correction
     if "km" in telemetry_name and np.max(telemetry_val) > 1e6:
         telemetry_val = telemetry_val / 1000.0
-        
-    filepath = os.path.join(run_folder, filename)
-    
-    data_out = np.hstack([t_vals.reshape(-1, 1), telemetry_val.reshape(-1, 1), interleaved_data])
-    pd.DataFrame(data_out, columns=cols).to_csv(filepath, index=False)
-    print(f"Data saved to {filepath}")
 
-def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com, params):
+    filepath = os.path.join(run_folder, filename)
+    data_out = np.hstack([t_vals.reshape(-1, 1), telemetry_val.reshape(-1, 1), interleaved_data])
+    df = pd.DataFrame(data_out, columns=cols)
+
+    # Use append mode to prevent OOM on large missions
+    mode = 'a' if append else 'w'
+    header = not append or not os.path.exists(filepath)
+
+    df.to_csv(filepath, index=False, mode=mode, header=header)
+
+    if not silent:
+        print(f"Data {'appended' if append else 'saved'} to {filepath}")
+
+def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com, params, p_arr=None, is_final=False, silent=False):
     """
     Saves simulation parameters and key results to a YAML file for easy reference.
-    This complements the CSV data with human-readable metadata and summary statistics.
+    Differentiates between initial setup and final mission report.
     """
     run_id = os.path.basename(os.path.normpath(run_folder))
 
     initial_sma = sma_com[0]
     final_sma = sma_com[-1]
     sma_drop = initial_sma - final_sma
-    
+
+    results = {
+        "com_sma_initial_m": float(initial_sma),
+        "com_sma_final_m": float(final_sma),
+        "com_sma_drop_m": float(sma_drop),
+        "simulation_time_s": float(t_vals[-1] - t_vals[0])
+    }
+
+    # Generate Hashes
+    p_hash = "N/A"
+    report_hash = "N/A"
+
+    if p_arr is not None:
+        p_hash = hashlib.sha256(p_arr.tobytes()).hexdigest()
+        if is_final:
+            # Generate a composite hash for the entire report (Params + Results)
+            # KISS: Join p_hash with a string representation of the results dict
+            report_input = p_hash + str(results)
+            report_hash = hashlib.sha256(report_input.encode()).hexdigest()
+
     output_data = {
         "metadata": {
             "run_id": run_id,
-            "description": "Electrodynamic Tether Orbital Decay Simulation"
+            "description": "Electrodynamic Tether Orbital Decay Simulation",
+            "parameter_hash": p_hash,
+            "report_hash": report_hash
         },
         "parameters": params.to_dict(),
-        "results": {
-            "com_sma_initial_m": float(initial_sma),
-            "com_sma_final_m": float(final_sma),
-            "com_sma_drop_m": float(sma_drop),
-            "simulation_time_s": float(t_vals[-1] - t_vals[0])
-        }
     }
+    
+    if is_final:
+        output_data["results"] = results
+        
     filepath = os.path.join(run_folder, filename)
 
     with open(filepath, 'w') as file:
         yaml.dump(output_data, file, default_flow_style=False, sort_keys=False)
 
-    print(f"Configuration parameters and results summary saved to {filepath}")
+    if not silent:
+        if is_final:
+            print(f"Final mission report and integrity hash saved to {filepath}")
+        else:
+            print(f"Simulation parameters initialized at {filepath}")

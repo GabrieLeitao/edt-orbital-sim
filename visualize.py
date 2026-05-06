@@ -166,7 +166,7 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
 
     # 4. Widget Setup
     is_playing = [False]
-    speed_factor = 50  # Playback speed: skip N frames per step
+    speed_factor = max(1, frames // 500)  # Playback speed: skip N frames per step
     ax_slider = plt.axes([0.25, 0.02, 0.5, 0.03])
     slider = Slider(ax_slider, 'Time Index', 0, frames-1, valinit=0, valstep=1)
     
@@ -213,8 +213,9 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         marker_sc_st.set_data([it[sc_idx]], [rd[sc_idx]])
         
         # Zoom on the 50m rope. Target is at (0,0) in LVLH.
-        ax_sat_target.set_xlim([-80, 80])
-        ax_sat_target.set_ylim([80, -80]) # Inverted: Down is towards Earth (Positive RD)
+        zoomed_limit = params.L_rope * 1.5
+        ax_sat_target.set_xlim([-zoomed_limit, zoomed_limit])
+        ax_sat_target.set_ylim([zoomed_limit, -zoomed_limit]) # Inverted: Down is towards Earth (Positive RD)
 
         # 4. EDT Behavior View
         line_edt_full.set_data(it, rd)
@@ -223,8 +224,9 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         marker_target_edt.set_data([it[target_idx]], [rd[target_idx]])
         
         # Zoom on the 2km tether
-        ax_edt.set_xlim([-750, 750])
-        ax_edt.set_ylim([750, -750]) # Inverted: Down is towards Earth (Positive RD)
+        zoomed_limit = params.L_edt * 1.5
+        ax_edt.set_xlim([-zoomed_limit, zoomed_limit])
+        ax_edt.set_ylim([zoomed_limit, -zoomed_limit]) # Inverted: Down is towards Earth (Positive RD)
 
         # 5. LVLH 3D View
         line_lvlh_3d.set_data(it, ct)
@@ -234,9 +236,9 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         marker_sc_3d.set_data([it[sc_idx]], [ct[sc_idx]])
         marker_sc_3d.set_3d_properties([rd[sc_idx]])
         
-        ax_lvlh_3d.set_xlim3d([-750, 750])
-        ax_lvlh_3d.set_ylim3d([-750, 750])
-        ax_lvlh_3d.set_zlim3d([750, -750])
+        ax_lvlh_3d.set_xlim3d([-zoomed_limit, zoomed_limit])
+        ax_lvlh_3d.set_ylim3d([-zoomed_limit, zoomed_limit])
+        ax_lvlh_3d.set_zlim3d([zoomed_limit, -zoomed_limit]) # Inverted: Positive Z points to Earth center
         ax_lvlh_3d.set_xlabel("In-Track [m]")
         ax_lvlh_3d.set_ylabel("Cross-Track [m]")
         ax_lvlh_3d.set_zlabel("Radial [m]")

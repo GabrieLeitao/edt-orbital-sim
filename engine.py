@@ -1,7 +1,9 @@
 import numpy as np
+import os
 from tqdm import tqdm
 from scipy.integrate import solve_ivp
 from dynamics import tether_dynamics_fast
+import hashlib
 
 def setup_initial_state(params):
     """
@@ -62,24 +64,71 @@ def setup_initial_state(params):
     X0[3*num_masses:] = vel.flatten()
     return X0
 
-def integrate_system(X0, t_span, p_arr, desc, rtol=1e-7, atol=1e-9):
+def save_checkpoint(run_folder, t, X, p_arr, history_t=None, history_X=None):
+    """
+    Saves the current state and accumulated history to a binary checkpoint.
+    Performance: Using .npz for fast binary I/O of history arrays.
+    """
+    p_hash = hashlib.sha256(p_arr.tobytes()).hexdigest()
+    checkpoint_path = os.path.join(run_folder, "checkpoint.npz")
+    
+    # Pack data. history_t/X are optional for simple state saves.
+    save_args = {
+        "t": t, "X": X, "p_arr": p_arr, "p_hash": p_hash,
+        "history_t": history_t if history_t is not None else np.array([]),
+        "history_X": history_X if history_X is not None else np.array([])
+    }
+    np.savez(checkpoint_path, **save_args)
+    
+    with open(os.path.join(run_folder, "last_checkpoint.txt"), "w") as f:
+        f.write(f"Last checkpoint saved at t = {t:.2f} s\nParameter Hash: {p_hash}")
+
+def load_checkpoint(run_folder):
+    """
+    Loads state and history from binary checkpoint.
+    Returns (t, X, p_arr, p_hash, history_t, history_X).
+    """
+    checkpoint_path = os.path.join(run_folder, "checkpoint.npz")
+    if os.path.exists(checkpoint_path):
+        data = np.load(checkpoint_path)
+        p_hash = str(data['p_hash']) if 'p_hash' in data.files else None
+        h_t = data['history_t'] if 'history_t' in data.files else None
+        h_X = data['history_X'] if 'history_X' in data.files else None
+        return float(data['t']), data['X'], data['p_arr'], p_hash, h_t, h_X
+    return None, None, None, None, None, None
+
+def integrate_system(X0, t_span, p_arr, desc, rtol=1e-7, atol=1e-9, pbar=None, sampling_hz=1.0):
     """
     Driver for the ODE solver with real-time progress feedback.
+    Performance: Uses t_eval to downsample output, preventing memory bloat from micro-steps.
     """
-    pbar_container = [None]
-    last_t_rounded = [0]
+    local_pbar = [None]
+    t0, tf = t_span
+    last_t_rounded = [int(t0)]
+    
+    # Downsampling: Ensure we only save state at the requested frequency.
+    # 1.0 Hz is scientific standard for long LEO mission telemetry.
+    t_eval = np.linspace(t0, tf, int((tf - t0) * sampling_hz) + 1)
 
     def wrapped_dynamics(t, y):
-        if pbar_container[0] is None:
-            pbar_container[0] = tqdm(total=int(t_span[1]), unit=' seconds', desc=desc)
+        # Use provided pbar or create a local one for this segment
+        pb = pbar if pbar is not None else local_pbar[0]
+        
+        if pb is None and pbar is None:
+            local_pbar[0] = tqdm(total=int(tf - t0), unit=' seconds', desc=desc)
+            pb = local_pbar[0]
+        
         t_now_rounded = int(t)
         if t_now_rounded > last_t_rounded[0]:
-            pbar_container[0].update(t_now_rounded - last_t_rounded[0])
+            if pb is not None:
+                pb.update(t_now_rounded - last_t_rounded[0])
             last_t_rounded[0] = t_now_rounded
         return tether_dynamics_fast(t, y, p_arr)
 
-    sol = solve_ivp(wrapped_dynamics, t_span, X0, method='LSODA', rtol=rtol, atol=atol)
+    # method='LSODA' handles stiff aluminum EDT dynamics efficiently
+    sol = solve_ivp(wrapped_dynamics, (t0, tf), X0, method='LSODA', 
+                    t_eval=t_eval, rtol=rtol, atol=atol)
     
-    if pbar_container[0] is not None:
-        pbar_container[0].close()
+    if local_pbar[0] is not None:
+        local_pbar[0].close()
     return sol

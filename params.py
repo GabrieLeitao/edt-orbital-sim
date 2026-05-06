@@ -27,7 +27,7 @@ class SimulationParams:
 
         # 4. EDT Properties (SC-Tip)
         self.L_edt = 200.0            # Total EDT length [m]
-        self.N_edt = 10               # Number of segments
+        self.N_edt = 5#10               # Number of segments
         self.E_edt = 70e9             # Young's Modulus (Aluminum) [Pa]
         self.diam_edt = 0.0015        # 1.5mm wire
         self.rho_aluminum = 2700.0    # Aluminum density [kg/m^3]
