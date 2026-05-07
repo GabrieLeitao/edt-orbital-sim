@@ -51,6 +51,7 @@ Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method. The solv
 - `engine.py`: Initialization kernel (Stable Gravity-Gradient configuration) and ODE driver.
 - `analysis.py`: Telemetry engine for SMA decay, energy conservation, and libration analysis.
 - `visualize.py`: Interactive 2x2 dashboard with ECI, Relative In-Plane (In-Track vs Radial), and LVLH 3D views.
+- `stability.py`: Runs preflight stress test to check margins and if method is stable.
 
 ## Building and Running
 
@@ -58,6 +59,10 @@ Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method. The solv
 Install dependencies using pip:
 ```bash
 pip install -r requirements.txt
+```
+Note: using a virtual environment is recommended, with e.g.:
+```bash
+python3 -m venv .venv
 ```
 
 1. **Validate Physics**:
@@ -72,12 +77,12 @@ pip install -r requirements.txt
    *Propagates the full deorbiting mission with active Lorentz forces and drag. Supports periodic binary checkpointing for lossless resume.*
 
    **No checkpoint:**
-   To skip periodic checkpointing and intermediate CSV saves (maximizing execution speed), use:
+   To skip periodic checkpointing and intermediate CSV saves, use:
    ```bash
    python simulate.py --no-checkpoint
    ```
-   **No pre validation test:**
-   To skip pre validation checks that the model stability, and probability of EDT slingshoting, use:
+   **No preflight stress test:**
+   To skip preflight stress validation test for material stability, use:
    ```bash
    python simulate.py --no-test
    ```
@@ -89,6 +94,13 @@ pip install -r requirements.txt
 
 
 ## Assumptions
-- Centered Dipole magnetic field (Z-aligned).
 - Constant current along the EDT.
 - Rigid-body rotational dynamics of the satellites are neglected (point-mass approximation).
+
+
+## TODO
+1. plot current on EDT
+2. plot Lorentz force and air drag on same graph
+3. test with higher sigmoid
+4. test implicit model w/ vs wo/ jacobian matrix 
+5. orbit inclination
