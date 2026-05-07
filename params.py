@@ -48,7 +48,7 @@ class SimulationParams:
         self.z_plasma = 100.0         # Plasma contactor impedance [Ohm]
         self.r_load = 500.0           # Load resistance [Ohm]
 
-        self.r_wire = self.rho_aluminum * self.L_edt / self.area_edt # resistence of the EDT wire
+        self.r_wire = self.rho_al_res * self.L_edt / self.area_edt 
         self.r_total = self.r_wire + self.z_plasma + self.r_load
 
         # 5. Environment Assumptions

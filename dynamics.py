@@ -200,3 +200,49 @@ def tether_dynamics_fast(t, X, p_arr):
     dX[3*num_masses:] = accel.flatten()
     
     return dX
+
+@njit
+def tether_jacobian_fast(t, X, p_arr):
+    """
+    Numba-JIT optimized numerical Jacobian.
+    Calculates J = df/dX using finite differences for acceleration terms.
+    
+    Structure:
+    J = [ 0  I ]  (Upper half: d(pos_dot)/d(pos)=0, d(pos_dot)/d(vel)=I)
+        [ Jr Jv ] (Lower half: d(vel_dot)/d(pos)=Jr, d(vel_dot)/d(vel)=Jv)
+    """
+    n = X.shape[0]
+    m = n // 2 # Number of position/velocity components (3 * num_masses)
+    jac = np.zeros((n, n))
+    
+    # 1. Upper right block: d(pos_dot)/d(vel) = I
+    for i in range(m):
+        jac[i, m + i] = 1.0
+        
+    # 2. Lower blocks: Finite Difference for Accel sensitivities
+    # We use a forward-difference for Jr and Jv.
+    # To optimize, we mutate X in-place and restore it.
+    f0 = tether_dynamics_fast(t, X, p_arr)
+    a0 = f0[m:]
+    
+    # Jr = d(accel)/d(pos)
+    for j in range(m):
+        # Use relative epsilon for Earth-scale positions (~7,000 km)
+        eps = 1e-8 * max(1.0, abs(X[j]))
+        orig_val = X[j]
+        X[j] += eps
+        f_eps = tether_dynamics_fast(t, X, p_arr)
+        jac[m:, j] = (f_eps[m:] - a0) / eps
+        X[j] = orig_val
+        
+    # Jv = d(accel)/d(vel)
+    for j in range(m):
+        # Use relative epsilon for velocities (~7,000 m/s)
+        eps = 1e-8 * max(1.0, abs(X[m + j]))
+        orig_val = X[m + j]
+        X[m + j] += eps
+        f_eps = tether_dynamics_fast(t, X, p_arr)
+        jac[m:, m + j] = (f_eps[m:] - a0) / eps
+        X[m + j] = orig_val
+        
+    return jac

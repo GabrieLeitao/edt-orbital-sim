@@ -17,18 +17,37 @@ from stability import run_preflight_stability_check, check_state_sanity
 
 def plot_simulation(t_vals, sma_com, X_vals, params, run_folder):
     """Generate deorbiting plots"""
-    plt.figure(figsize=(12, 5))
+    plt.figure(figsize=(14, 6))
     
+    # 1. SMA Plot
     plt.subplot(1, 2, 1)
-    plt.plot(t_vals/60, (sma_com - sma_com[0])/1e3)
-    plt.grid(True); plt.xlabel('Time [min]'); plt.ylabel('Δ System SMA (CoM) [km]')
-    plt.title('System Orbital Decay')
+    t_min = t_vals / 60.0
+    sma_delta_km = (sma_com - sma_com[0]) / 1e3
     
+    # Calculate a moving average (window = 1 orbital period ~ 90 mins)
+    # This filters out J2 oscillations and libration noise.
+    # At 1Hz sampling, 5400 points = 1 orbit.
+    window = 5400 
+    if len(sma_com) > window:
+        sma_mean = pd.Series(sma_delta_km).rolling(window=window, center=True).mean()
+        plt.plot(t_min, sma_mean, 'r', linewidth=2.5, label='Mean Decay [km]')
+    
+    plt.plot(t_min, sma_delta_km, 'b', alpha=0.3, label='Δ System SMA (CoM) [km]')
+    plt.grid(True)
+    plt.xlabel('Time [min]')
+    plt.ylabel('Δ System SMA (CoM) [km]')
+    plt.title('Orbital Decay Trend')
+    plt.legend()
+    
+    # 2. Tether Configuration
     plt.subplot(1, 2, 2)
     final_pos = X_vals[-1, :3*params.num_masses].reshape((params.num_masses, 3))
     rel_pos = final_pos - final_pos[params.N_edt + 2]
     plt.plot(rel_pos[:, 0], rel_pos[:, 1], '-ok')
-    plt.gca().set_aspect('equal'); plt.grid(True); plt.title('Final Tether Configuration')
+    plt.gca().set_aspect('equal'); plt.grid(True)
+    plt.title('Final Tether Configuration')
+    plt.xlabel('Radial Distance [m]')
+    plt.ylabel('In-Track Distance [m]')
     
     plt.tight_layout()
     plt.savefig(os.path.join(run_folder, "simulation_plots.png"))
@@ -135,7 +154,7 @@ def run_mission(skip_checkpoint=False, skip_test=False):
             print(f"CRITICAL: Simulation aborted during pre-flight. {msg}")
             return
 
-    t_end = 5400
+    t_end = 1000
     step_size = 500.0
     t_curr, X_curr = t_start, X0
     real_start = time.time()

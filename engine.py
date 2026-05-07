@@ -2,7 +2,7 @@ import numpy as np
 import os
 from tqdm import tqdm
 from scipy.integrate import solve_ivp
-from dynamics import tether_dynamics_fast
+from dynamics import tether_dynamics_fast, tether_jacobian_fast
 import hashlib
 
 def setup_initial_state(params):
@@ -97,7 +97,7 @@ def load_checkpoint(run_folder):
         return float(data['t']), data['X'], data['p_arr'], p_hash, h_t, h_X
     return None, None, None, None, None, None
 
-def integrate_system(X0, t_span, p_arr, desc, rtol=1e-6, atol=1e-8, pbar=None, sampling_hz=1.0):
+def integrate_system(X0, t_span, p_arr, desc, rtol=1e-7, atol=1e-9, pbar=None, sampling_hz=1.0):
     """
     Driver for the ODE solver with real-time progress feedback.
     Performance: Uses t_eval to downsample output, preventing memory bloat from micro-steps.
@@ -105,7 +105,7 @@ def integrate_system(X0, t_span, p_arr, desc, rtol=1e-6, atol=1e-8, pbar=None, s
     local_pbar = [None]
     t0, tf = t_span
     last_t_rounded = [int(t0)]
-    
+
     # Downsampling: Ensure we only save state at the requested frequency.
     # 1.0 Hz is scientific standard for long LEO mission telemetry.
     t_eval = np.linspace(t0, tf, int((tf - t0) * sampling_hz) + 1)
@@ -113,11 +113,11 @@ def integrate_system(X0, t_span, p_arr, desc, rtol=1e-6, atol=1e-8, pbar=None, s
     def wrapped_dynamics(t, y):
         # Use provided pbar or create a local one for this segment
         pb = pbar if pbar is not None else local_pbar[0]
-        
+
         if pb is None and pbar is None:
             local_pbar[0] = tqdm(total=int(tf - t0), unit=' seconds', desc=desc)
             pb = local_pbar[0]
-        
+
         t_now_rounded = int(t)
         if t_now_rounded > last_t_rounded[0]:
             if pb is not None:
@@ -126,9 +126,12 @@ def integrate_system(X0, t_span, p_arr, desc, rtol=1e-6, atol=1e-8, pbar=None, s
         return tether_dynamics_fast(t, y, p_arr)
 
     # method='LSODA' handles stiff aluminum EDT dynamics efficiently
+    # Providing the jitted Jacobian (jac) significantly speeds up convergence.
     sol = solve_ivp(wrapped_dynamics, (t0, tf), X0, method='LSODA', 
+                    jac=lambda t, y: tether_jacobian_fast(t, y, p_arr),
                     t_eval=t_eval, rtol=rtol, atol=atol)
-    
+
     if local_pbar[0] is not None:
         local_pbar[0].close()
     return sol
+

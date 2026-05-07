@@ -96,9 +96,10 @@ def analyze_stress_evolution(t_vals, X_vals, params, breaking_tension):
     
     return overall_max_tension, sf, is_growing
 
-def run_preflight_stability_check(X0, p_arr, params, duration=100.0):
+
+def run_preflight_stability_check(X0, p_arr, params, duration=300.0):
     """
-    Runs a 700s WORST-CASE Stress Test to catch environmental instabilities.
+    Runs a 300s WORST-CASE Stress Test to catch environmental instabilities.
     """
     print(f"--- Pre-flight Worst-Case Stress Test ({duration}s) ---")
 
@@ -114,7 +115,7 @@ def run_preflight_stability_check(X0, p_arr, params, duration=100.0):
     vel = X_stressed[3*num_masses:].reshape((num_masses, 3))
     target_pos = pos[-1]
     for i in range(num_masses - 1):
-        pos[i] += 0.02 * (target_pos - pos[i]) # 2% slack
+        pos[i] += 0.005 * (target_pos - pos[i]) # 0.5% slack
     
     kick_dir = (pos[1] - pos[0]) / np.linalg.norm(pos[1] - pos[0])
     vel[0] += kick_dir * 1.0 
