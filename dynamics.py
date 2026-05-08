@@ -39,7 +39,7 @@ def smooth_tension(dl, dl_dot, k, beta):
     # Smooth transition: 
     # Use a sigmoid-like scaling to prevent the 'hammer blow' of sudden tension
     # Transition width is ~10cm (coefficient 50.0) for numerical stability
-    scale = 1.0 / (1.0 + np.exp(-25.0 * dl))
+    scale = 1.0 / (1.0 + np.exp(-50.0 * dl))
 
     tension = (f_elastic + f_damping) * scale
 
@@ -64,8 +64,6 @@ def tether_dynamics_fast(t, X, p_arr):
     dX = np.zeros_like(X)
     
     # Extract positions and velocities
-    # pos = X[:3*num_masses].reshape((num_masses, 3))
-    # vel = X[3*num_masses:].reshape((num_masses, 3))
     X_slice = np.ascontiguousarray(X[:3*num_masses])
     pos = X_slice.reshape((num_masses, 3))
     X_slice = np.ascontiguousarray(X[3*num_masses:])
@@ -79,8 +77,10 @@ def tether_dynamics_fast(t, X, p_arr):
     j2 = p_arr[p.IDX_J2]
     cd = p_arr[p.IDX_CD]
     area = p_arr[p.IDX_AREA]
-    diam_edt = p_arr[p.IDX_DIAM_EDT]
     area_edt = p_arr[p.IDX_AREA_EDT]
+    diam_edt = p_arr[p.IDX_DIAM_EDT]
+    diam_rope = p_arr[p.IDX_DIAM_ROPE]
+    l_rope = p_arr[p.IDX_L_ROPE]
     l0_edt_seg = p_arr[p.IDX_L_EDT] / (n_edt + 1)
     
     for i in range(num_masses):
@@ -108,13 +108,15 @@ def tether_dynamics_fast(t, X, p_arr):
         
         # Calculate node-specific area
         if i == 0: # Tip
-            node_area = 0.5 * l0_edt_seg * diam_edt
+            node_area = p_arr[p.IDX_AREA_TIP] + 0.5 * l0_edt_seg * diam_edt
         elif i <= n_edt: # Beads
             node_area = l0_edt_seg * diam_edt
         elif i == n_edt + 1: # SC
-            node_area = area + 0.5 * l0_edt_seg * diam_edt
+            # SC takes half of last EDT segment AND half of the rope
+            node_area = area + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
         else: # Target
-            node_area = area
+            # Target takes its area AND half of the rope
+            node_area = area + 0.5 * l_rope * diam_rope
 
         if v_rel_norm > 1e-3:
             f_drag = -0.5 * rho * cd * node_area * v_rel_norm * v_rel
@@ -200,6 +202,81 @@ def tether_dynamics_fast(t, X, p_arr):
     dX[3*num_masses:] = accel.flatten()
     
     return dX
+
+@njit
+def compute_physics_metrics(t, X, p_arr):
+    """
+    Recalculates instantaneous physical metrics for telemetry.
+    Returns: (Current [A], Total Lorentz Force [N], Total Drag Force [N])
+    """
+    n_edt = int(p_arr[p.IDX_N_EDT])
+    num_masses = 3 + n_edt
+    
+    # Ensure contiguity for Numba's reshape
+    X_pos_slice = np.ascontiguousarray(X[:3*num_masses])
+    pos = X_pos_slice.reshape((num_masses, 3))
+    X_vel_slice = np.ascontiguousarray(X[3*num_masses:])
+    vel = X_vel_slice.reshape((num_masses, 3))
+    
+    cd = p_arr[p.IDX_CD]
+    area_sc = p_arr[p.IDX_AREA]
+    diam_edt = p_arr[p.IDX_DIAM_EDT]
+    diam_rope = p_arr[p.IDX_DIAM_ROPE]
+    l_rope = p_arr[p.IDX_L_ROPE]
+    l0_edt_seg = p_arr[p.IDX_L_EDT] / (n_edt + 1)
+    
+    # 1. Drag Calculation (Total System)
+    total_drag_force = np.zeros(3)
+    for i in range(num_masses):
+        r = pos[i]
+        v = vel[i]
+        # Environment at current node
+        b_vec, rho = get_environment_fast(r, v, t, p_arr)
+        
+        # Earth rotation for relative wind
+        v_rel = v - np.cross(np.array([0.0, 0.0, 7.2921159e-5]), r)
+        v_rel_norm = np.linalg.norm(v_rel)
+        
+        # Area attribution
+        if i == n_edt + 2: # Target
+            node_area = area_sc + 0.5 * l_rope * diam_rope
+        elif i == n_edt + 1: # SC
+            node_area = area_sc + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
+        elif i == 0: # Tip
+            node_area = p_arr[p.IDX_AREA_TIP] + 0.5 * l0_edt_seg * diam_edt
+        else: # EDT Bead
+            node_area = diam_edt * l0_edt_seg
+            
+        f_drag = -0.5 * rho * cd * node_area * v_rel_norm * v_rel
+        total_drag_force += f_drag
+
+    # 2. Current and Lorentz Calculation
+    v_total_emf = 0.0
+    for j in range(n_edt + 1):
+        p_a = pos[j]
+        p_b = pos[j+1]
+        v_a = vel[j]
+        v_b = vel[j+1]
+        
+        r_seg = p_b - p_a
+        v_mid = (v_a + v_b) / 2.0
+        r_mid = (p_a + p_b) / 2.0
+        
+        b_vec, rho = get_environment_fast(r_mid, v_mid, t, p_arr)
+        v_induced = np.dot(np.cross(v_mid, b_vec), r_seg)
+        v_total_emf += v_induced
+        
+    i_dynamic = v_total_emf / p_arr[p.IDX_R_TOTAL]
+    
+    total_lorentz_force = np.zeros(3)
+    for j in range(n_edt + 1):
+        p_a = pos[j]; p_b = pos[j+1]
+        r_seg = p_b - p_a
+        b_vec, _ = get_environment_fast((p_a + p_b)/2.0, (vel[j] + vel[j+1])/2.0, t, p_arr)
+        f_l = i_dynamic * np.cross(r_seg, b_vec)
+        total_lorentz_force += f_l
+
+    return i_dynamic, np.linalg.norm(total_lorentz_force), np.linalg.norm(total_drag_force)
 
 @njit
 def tether_jacobian_fast(t, X, p_arr):

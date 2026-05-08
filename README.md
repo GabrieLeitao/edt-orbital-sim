@@ -99,8 +99,9 @@ python3 -m venv .venv
 
 
 ## TODO
-1. plot current on EDT
-2. plot Lorentz force and air drag on same graph
-3. test with higher sigmoid
+- [x] plot current on EDT
+- [x] plot Lorentz force and air drag on same graph
+- altitude km throughout orbit
+3. test with higher sigmoid (25 vs 50)
 4. test implicit model w/ vs wo/ jacobian matrix 
 5. orbit inclination

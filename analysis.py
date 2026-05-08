@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import os
 from numba import njit
-from dynamics import get_mass_fast
+from dynamics import get_mass_fast, compute_physics_metrics
 import params as p
 import yaml
 import hashlib
@@ -87,24 +87,30 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params):
     
     Metrics Calculated:
     1. Mechanical Energy: Validates the integrity of the conservative physics.
-    2. Geometric Stability: Monitors Euclidean distance between coupled masses 
-       to ensure no 'teleportation' or catastrophic structural failure.
-    3. Libration (Pitch): Calculates the angle between the local vertical (Radial CoM) 
-       and the tether's longitudinal axis to verify gravity-gradient stability.
+    2. Libration (Pitch): Angle between radial and tether axis.
+    3. SMA: Orbital decay tracking.
+    4. EDT Current: Dynamic current from motional EMF.
+    5. Forces: Lorentz vs. Drag magnitude comparison.
     """
     num_masses = params.num_masses
     masses = np.array([get_mass_fast(i, p_arr, num_masses) for i in range(num_masses)])
     total_m = np.sum(masses)
     
-    energy = np.zeros(len(t_vals))
-    rope_L = np.zeros(len(t_vals))
-    edt_L = np.zeros(len(t_vals))
-    pitch = np.zeros(len(t_vals))
+    count = len(t_vals)
+    energy = np.zeros(count)
+    rope_L = np.zeros(count)
+    edt_L = np.zeros(count)
+    pitch = np.zeros(count)
+    current = np.zeros(count)
+    lorentz = np.zeros(count)
+    drag = np.zeros(count)
+    
+    sma = calculate_com_sma(t_vals, X_vals, p_arr, params)
 
     idx_sc = params.N_edt + 1
     idx_target = params.N_edt + 2
 
-    for i in range(len(t_vals)):
+    for i in range(count):
         p_frame = X_vals[i, :3*num_masses].reshape((num_masses, 3))
         v_frame = X_vals[i, 3*num_masses:].reshape((num_masses, 3))
         
@@ -114,6 +120,7 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params):
         rope_L[i] = np.linalg.norm(r_rope)
         edt_L[i] = np.linalg.norm(p_frame[idx_sc] - p_frame[0])
         
+        # Libration
         r_com = np.zeros(3)
         for j in range(num_masses):
             r_com += (masses[j] / total_m) * p_frame[j]
@@ -121,22 +128,42 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params):
         u_tether = (p_frame[idx_target] - p_frame[0]) / (rope_L[i] + edt_L[i])
         pitch[i] = np.degrees(np.arccos(np.clip(np.dot(u_v, u_tether), -1.0, 1.0)))
         
-    return energy, rope_L, edt_L, pitch
+        # Physics Metrics (Current, Forces)
+        curr, lor, drg = compute_physics_metrics(t_vals[i], X_vals[i], p_arr)
+        current[i] = curr
+        lorentz[i] = lor
+        drag[i] = drg
+        
+    telemetry = {
+        "sma_km": sma / 1000.0,
+        "current_a": current,
+        "lorentz_n": lorentz,
+        "drag_n": drag,
+        "pitch_deg": pitch,
+        "energy_j": energy,
+        "rope_l_m": rope_L,
+        "edt_l_m": edt_L
+    }
+    return telemetry
 
-def save_csv(filename, run_folder, t_vals, telemetry_val, telemetry_name, X_vals, params, silent=False, append=False):
+def save_csv(filename, run_folder, t_vals, telemetry_dict, X_vals, params, silent=False, append=False):
     """
-    Saves simulation results to a standardized CSV format in the results/ directory.
-    Supports 'append' mode for memory-efficient segmented writes.
+    Saves simulation results to a standardized CSV format.
+    telemetry_dict: Dictionary of arrays to be saved as columns.
     """
     num_masses = params.num_masses
-    cols = ['time_s', telemetry_name]
+    
+    # 1. Prepare Telemetry Columns
+    tel_names = list(telemetry_dict.keys())
+    tel_data = np.column_stack([telemetry_dict[name] for name in tel_names])
+    
+    cols = ['time_s'] + tel_names
 
-    # Pre-calculate column names (only used if writing new file or header)
+    # 2. Prepare State Columns
     for i in range(num_masses):
         label = f"m{i}_target" if i == params.N_edt + 2 else (f"m{i}_sc" if i == params.N_edt + 1 else (f"m{i}_tip" if i == 0 else f"m{i}_bead"))
         cols += [f'{label}_rx_m', f'{label}_ry_m', f'{label}_rz_m', f'{label}_vx_ms', f'{label}_vy_ms', f'{label}_vz_ms']
 
-    # Reshape X_vals to facilitate interleaving
     pos_data = X_vals[:, :3*num_masses].reshape(-1, num_masses, 3)
     vel_data = X_vals[:, 3*num_masses:].reshape(-1, num_masses, 3)
 
@@ -145,18 +172,12 @@ def save_csv(filename, run_folder, t_vals, telemetry_val, telemetry_name, X_vals
         interleaved_data[:, 6*i:6*i+3] = pos_data[:, i, :]
         interleaved_data[:, 6*i+3:6*i+6] = vel_data[:, i, :]
 
-    # Unit correction
-    if "km" in telemetry_name and np.max(telemetry_val) > 1e6:
-        telemetry_val = telemetry_val / 1000.0
-
     filepath = os.path.join(run_folder, filename)
-    data_out = np.hstack([t_vals.reshape(-1, 1), telemetry_val.reshape(-1, 1), interleaved_data])
+    data_out = np.hstack([t_vals.reshape(-1, 1), tel_data, interleaved_data])
     df = pd.DataFrame(data_out, columns=cols)
 
-    # Use append mode to prevent OOM on large missions
     mode = 'a' if append else 'w'
     header = not append or not os.path.exists(filepath)
-
     df.to_csv(filepath, index=False, mode=mode, header=header)
 
     if not silent:

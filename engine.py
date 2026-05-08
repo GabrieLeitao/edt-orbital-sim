@@ -127,8 +127,8 @@ def integrate_system(X0, t_span, p_arr, desc, rtol=1e-7, atol=1e-9, pbar=None, s
 
     # method='LSODA' handles stiff aluminum EDT dynamics efficiently
     # Providing the jitted Jacobian (jac) significantly speeds up convergence.
-    sol = solve_ivp(wrapped_dynamics, (t0, tf), X0, method='LSODA', 
-                    jac=lambda t, y: tether_jacobian_fast(t, y, p_arr),
+    sol = solve_ivp(wrapped_dynamics, (t0, tf), X0, method='RK45', 
+                    # jac=lambda t, y: tether_jacobian_fast(t, y, p_arr),
                     t_eval=t_eval, rtol=rtol, atol=atol)
 
     if local_pbar[0] is not None:

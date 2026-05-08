@@ -11,6 +11,7 @@ class SimulationParams:
         self.m_target = 800.0         # Target satellite mass
         self.m_sc = 100.0             # Our spacecraft mass
         self.m_tip = 2.0             # EDT tip mass (boom/weight)
+        self.area_tip = 0.1          # Tip mass drag area [m^2] (10cm x 10cm)
 
         # 3. Tether Properties (Rope: Target-SC)
         self.L_rope = 25.0            # Nominal rope length [m]
@@ -76,6 +77,7 @@ class SimulationParams:
                 "m_target": float(self.m_target),
                 "m_sc": float(self.m_sc),
                 "m_tip": float(self.m_tip),
+                "area_tip": float(self.area_tip),
             },
             "tether_properties": {
                 "L_rope": float(self.L_rope),
@@ -143,6 +145,7 @@ class SimulationParams:
         obj.m_target = masses.get("m_target", obj.m_target)
         obj.m_sc = masses.get("m_sc", obj.m_sc)
         obj.m_tip = masses.get("m_tip", obj.m_tip)
+        obj.area_tip = masses.get("area_tip", obj.area_tip)
         
         # 3. Rope Properties
         tether = p_dict.get("tether_properties", {})
@@ -192,7 +195,8 @@ class SimulationParams:
             self.L_rope, self.E_rope, self.diam_rope, self.k_rope, self.beta_rope,
             self.L_edt, float(self.N_edt), self.m_edt_total,
             self.E_edt, self.diam_edt, self.area_edt, self.beta_edt,
-            self.rho_al_res, self.z_plasma, self.r_load, self.r_wire, self.r_total, self.Cd, self.Area_sc
+            self.rho_al_res, self.z_plasma, self.r_load, self.r_wire, self.r_total, self.Cd, self.Area_sc,
+            self.area_tip
         ], dtype=np.float64)
 
 # Indices for the flat array
@@ -221,3 +225,4 @@ IDX_R_WIRE = 21
 IDX_R_TOTAL = 22
 IDX_CD = 23
 IDX_AREA = 24
+IDX_AREA_TIP = 25

@@ -87,34 +87,61 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         data_vel[:, i, 1] = df[f'{col_v}_vy_ms']
         data_vel[:, i, 2] = df[f'{col_v}_vz_ms']
 
-    # 2. Setup Figure (2x2 Grid)
-    fig = plt.figure(figsize=(15, 12))
-    plt.subplots_adjust(bottom=0.1, wspace=0.3, hspace=0.3)
+    # Telemetry Data
+    time_min = df['time_s'].values / 60.0
+    sma_km = df['sma_km'].values if 'sma_km' in df.columns else np.zeros(frames)
+    current_a = df['current_a'].values if 'current_a' in df.columns else np.zeros(frames)
+    lorentz_n = df['lorentz_n'].values if 'lorentz_n' in df.columns else np.zeros(frames)
+    drag_n = df['drag_n'].values if 'drag_n' in df.columns else np.zeros(frames)
+
+    # 2. Setup Figure (3x2 Grid)
+    fig = plt.figure(figsize=(16, 14))
+    plt.subplots_adjust(bottom=0.08, top=0.95, wspace=0.3, hspace=0.4)
     
     # Subplot 1: Full Orbit (ECI)
-    ax_orbit = fig.add_subplot(2, 2, 1, projection='3d')
+    ax_orbit = fig.add_subplot(3, 2, 1, projection='3d')
     ax_orbit.set_title("Full Orbit Trajectory (ECI)")
     
-    # Subplot 2: Sat + Target (In-Plane)
-    ax_sat_target = fig.add_subplot(2, 2, 2)
+    # Subplot 2: LVLH 3D Perspective
+    ax_lvlh_3d = fig.add_subplot(3, 2, 2, projection='3d')
+    ax_lvlh_3d.set_title("LVLH 3D Perspective")
+
+    # Subplot 3: Sat + Target (In-Plane)
+    ax_sat_target = fig.add_subplot(3, 2, 3)
     ax_sat_target.set_title("Sat + Target Behavior (In-Plane)")
     ax_sat_target.set_xlabel("In-Track [m]")
     ax_sat_target.set_ylabel("Radial [m]")
     ax_sat_target.grid(True)
-    # Ensure 'down' points to Earth by inverting Y-axis if Radial is positive outwards, 
-    # but eci_to_lvlh z points to Earth center. So positive Z is 'down'.
-    # We want 'down' to be visually down, so we keep Z as Y-axis and label it accordingly.
 
-    # Subplot 3: EDT Behavior (In-Plane)
-    ax_edt = fig.add_subplot(2, 2, 3)
+    # Subplot 4: EDT Behavior (In-Plane)
+    ax_edt = fig.add_subplot(3, 2, 4)
     ax_edt.set_title("EDT Full System Behavior (In-Plane)")
     ax_edt.set_xlabel("In-Track [m]")
     ax_edt.set_ylabel("Radial [m]")
     ax_edt.grid(True)
 
-    # Subplot 4: LVLH 3D Perspective
-    ax_lvlh_3d = fig.add_subplot(2, 2, 4, projection='3d')
-    ax_lvlh_3d.set_title("LVLH 3D Perspective")
+    # Subplot 5: Telemetry - Current
+    ax_current = fig.add_subplot(3, 2, 5)
+    ax_current.set_title("EDT Dynamic Current")
+    ax_current.set_xlabel("Time [min]")
+    ax_current.set_ylabel("Current [A]")
+    ax_current.grid(True)
+    ax_current.plot(time_min, current_a, 'm-', alpha=0.3)
+    line_current_indicator, = ax_current.plot([], [], 'mo', markersize=8)
+    v_line_current = ax_current.axvline(0, color='k', linestyle='--', alpha=0.5)
+
+    # Subplot 6: Telemetry - Forces
+    ax_forces = fig.add_subplot(3, 2, 6)
+    ax_forces.set_title("Perturbation Forces (Magnitudes)")
+    ax_forces.set_xlabel("Time [min]")
+    ax_forces.set_ylabel("Force [N]")
+    ax_forces.grid(True)
+    ax_forces.semilogy(time_min, lorentz_n, 'r-', alpha=0.4, label="Lorentz")
+    ax_forces.semilogy(time_min, drag_n, 'b-', alpha=0.4, label="Drag")
+    ax_forces.legend(loc='upper right')
+    line_lorentz_ind, = ax_forces.plot([], [], 'ro', markersize=6)
+    line_drag_ind, = ax_forces.plot([], [], 'bo', markersize=6)
+    v_line_forces = ax_forces.axvline(0, color='k', linestyle='--', alpha=0.5)
 
     # 3. Initialize Elements
     target_idx = num_masses - 1
@@ -123,11 +150,8 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
 
     # Orbit Elements
     skip = max(1, frames // 500)
-    # Background Orbit Path
     ax_orbit.plot(data_pos[::skip, target_idx, 0], data_pos[::skip, target_idx, 1], data_pos[::skip, target_idx, 2], 'k--', alpha=0.3, label="Orbit Path")
-    # Current Trajectory Trace
     trace_orbit, = ax_orbit.plot([], [], [], 'r-', lw=1.5, alpha=0.6, label="Trace")
-    # Current System Marker
     point_orbit, = ax_orbit.plot([], [], [], 'ro', markersize=6, label="Current Pos")
     
     # Earth Visualization
@@ -142,11 +166,9 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
     ax_orbit.set_xlabel("X (ECI) [m]")
     ax_orbit.set_ylabel("Y (ECI) [m]")
     ax_orbit.set_zlabel("Z (ECI) [m]")
-    ax_orbit.view_init(elev=20, azim=45) # Initial view to see inclination
-    ax_orbit.legend(loc='upper right', fontsize='small')
+    ax_orbit.view_init(elev=20, azim=45) 
 
     # Sat + Target Elements (2D)
-    # Horizontal: In-Track (X), Vertical: Radial (Z)
     line_st_rope, = ax_sat_target.plot([], [], 'k-', lw=2)
     marker_target_st, = ax_sat_target.plot([], [], 'rs', markersize=8, label="Target")
     marker_sc_st, = ax_sat_target.plot([], [], 'bo', markersize=6, label="SC")
@@ -166,7 +188,7 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
 
     # 4. Widget Setup
     is_playing = [False]
-    speed_factor = max(1, frames // 500)  # Playback speed: skip N frames per step
+    speed_factor = max(1, frames // 500)  
     ax_slider = plt.axes([0.25, 0.02, 0.5, 0.03])
     slider = Slider(ax_slider, 'Time Index', 0, frames-1, valinit=0, valstep=1)
     
@@ -176,6 +198,7 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
     # 5. Interactive Logic
     def update_view(frame_idx):
         frame_idx = int(frame_idx)
+        t_now = time_min[frame_idx]
         r_curr = data_pos[frame_idx]
         v_curr = data_vel[frame_idx]
         r_target = r_curr[target_idx]
@@ -184,49 +207,36 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         # 1. Full Orbit (ECI)
         point_orbit.set_data([r_target[0]], [r_target[1]])
         point_orbit.set_3d_properties([r_target[2]])
-        
-        # Update Trace (sample more densely as we play faster)
         trace_skip = max(1, frame_idx // 100)
         trace_data = data_pos[:frame_idx+1:trace_skip, target_idx, :]
         trace_orbit.set_data(trace_data[:, 0], trace_data[:, 1])
         trace_orbit.set_3d_properties(trace_data[:, 2])
         
-        # Keep ECI view centered on Earth
         limit = 8e6 
         ax_orbit.set_xlim3d([-limit, limit])
         ax_orbit.set_ylim3d([-limit, limit])
         ax_orbit.set_zlim3d([-limit, limit])
         
         # 2. LVLH Transformation
-        # r_lvlh: [N, 3] where 0: In-Track, 1: Cross-Track, 2: Radial (points to Earth)
         r_lvlh = eci_to_lvlh(r_curr, v_target, r_target)
-        
-        # In-Plane View: In-Track (x) vs Radial (z)
-        it = r_lvlh[:, 0]
-        ct = r_lvlh[:, 1]
-        rd = r_lvlh[:, 2] # Positive RD points to Earth center
+        it = r_lvlh[:, 0]; ct = r_lvlh[:, 1]; rd = r_lvlh[:, 2] 
 
-        # 3. Sat + Target View (Zoomed)
-        # Horizontal axis: In-Track (it), Vertical axis: Radial (rd)
+        # 3. Sat + Target View
         line_st_rope.set_data(it[[sc_idx, target_idx]], rd[[sc_idx, target_idx]])
         marker_target_st.set_data([it[target_idx]], [rd[target_idx]])
         marker_sc_st.set_data([it[sc_idx]], [rd[sc_idx]])
-        
-        # Zoom on the 50m rope. Target is at (0,0) in LVLH.
-        zoomed_limit = params.L_rope * 1.5
-        ax_sat_target.set_xlim([-zoomed_limit, zoomed_limit])
-        ax_sat_target.set_ylim([zoomed_limit, -zoomed_limit]) # Inverted: Down is towards Earth (Positive RD)
+        zoomed_limit_st = params.L_rope * 1.5
+        ax_sat_target.set_xlim([-zoomed_limit_st, zoomed_limit_st])
+        ax_sat_target.set_ylim([zoomed_limit_st, -zoomed_limit_st]) 
 
         # 4. EDT Behavior View
         line_edt_full.set_data(it, rd)
         marker_tip_edt.set_data([it[tip_idx]], [rd[tip_idx]])
         marker_sc_edt.set_data([it[sc_idx]], [rd[sc_idx]])
         marker_target_edt.set_data([it[target_idx]], [rd[target_idx]])
-        
-        # Zoom on the 2km tether
-        zoomed_limit = params.L_edt * 1.5
-        ax_edt.set_xlim([-zoomed_limit, zoomed_limit])
-        ax_edt.set_ylim([zoomed_limit, -zoomed_limit]) # Inverted: Down is towards Earth (Positive RD)
+        zoomed_limit_edt = params.L_edt * 1.5
+        ax_edt.set_xlim([-zoomed_limit_edt, zoomed_limit_edt])
+        ax_edt.set_ylim([zoomed_limit_edt, -zoomed_limit_edt]) 
 
         # 5. LVLH 3D View
         line_lvlh_3d.set_data(it, ct)
@@ -235,13 +245,17 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         marker_target_3d.set_3d_properties([rd[target_idx]])
         marker_sc_3d.set_data([it[sc_idx]], [ct[sc_idx]])
         marker_sc_3d.set_3d_properties([rd[sc_idx]])
+        ax_lvlh_3d.set_xlim3d([-zoomed_limit_edt, zoomed_limit_edt])
+        ax_lvlh_3d.set_ylim3d([-zoomed_limit_edt, zoomed_limit_edt])
+        ax_lvlh_3d.set_zlim3d([zoomed_limit_edt, -zoomed_limit_edt])
         
-        ax_lvlh_3d.set_xlim3d([-zoomed_limit, zoomed_limit])
-        ax_lvlh_3d.set_ylim3d([-zoomed_limit, zoomed_limit])
-        ax_lvlh_3d.set_zlim3d([zoomed_limit, -zoomed_limit]) # Inverted: Positive Z points to Earth center
-        ax_lvlh_3d.set_xlabel("In-Track [m]")
-        ax_lvlh_3d.set_ylabel("Cross-Track [m]")
-        ax_lvlh_3d.set_zlabel("Radial [m]")
+        # 6. Telemetry Indicators
+        line_current_indicator.set_data([t_now], [current_a[frame_idx]])
+        v_line_current.set_xdata([t_now])
+        
+        line_lorentz_ind.set_data([t_now], [lorentz_n[frame_idx]])
+        line_drag_ind.set_data([t_now], [drag_n[frame_idx]])
+        v_line_forces.set_xdata([t_now])
         
         fig.canvas.draw_idle()
 

@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from params import SimulationParams
 from engine import setup_initial_state, integrate_system, save_checkpoint, load_checkpoint
-from analysis import calculate_com_sma, save_csv, save_config_params_results_yaml
+from analysis import calculate_com_sma, save_csv, save_config_params_results_yaml, post_process_telemetry
 from utils import get_results_folder
 
 from stability import run_preflight_stability_check, check_state_sanity
@@ -154,7 +154,7 @@ def run_mission(skip_checkpoint=False, skip_test=False):
             print(f"CRITICAL: Simulation aborted during pre-flight. {msg}")
             return
 
-    t_end = 1000
+    t_end = 5400*8
     step_size = 500.0
     t_curr, X_curr = t_start, X0
     real_start = time.time()
@@ -188,8 +188,8 @@ def run_mission(skip_checkpoint=False, skip_test=False):
                 save_checkpoint(rf, t_curr, X_curr, p_arr, np.array(all_t), np.array(all_X))
                 
                 # Performance: Append only the NEW segment to CSV to avoid RAM spikes
-                sma_seg = calculate_com_sma(np.array(seg_t), np.array(seg_X), p_arr, params)
-                save_csv("simulation_results.csv", rf, np.array(seg_t), sma_seg, "sma_com_km", np.array(seg_X), params, silent=True, append=True)
+                tel_seg = post_process_telemetry(np.array(seg_t), np.array(seg_X), p_arr, params)
+                save_csv("simulation_results.csv", rf, np.array(seg_t), tel_seg, np.array(seg_X), params, silent=True, append=True)
                 
                 pbar.set_postfix_str("")
 
