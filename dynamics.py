@@ -3,7 +3,7 @@ from numba import njit
 import params as p
 from environment import get_environment_fast
 
-@njit
+@njit(fastmath=True)
 def get_mass_fast(idx, p_arr, num_masses):
     """Numba-compatible mass lookup"""
     n_edt = int(p_arr[p.IDX_N_EDT])
@@ -16,7 +16,7 @@ def get_mass_fast(idx, p_arr, num_masses):
     else:
         return p_arr[p.IDX_M_EDT_TOTAL] / n_edt
 
-@njit
+@njit(fastmath=True)
 def smooth_tension(dl, dl_dot, k, beta):
     """
     Calculates tension with a smooth transition from slack to taut.
@@ -52,7 +52,7 @@ def smooth_tension(dl, dl_dot, k, beta):
     
     return max(0.0, tension)
 
-@njit
+@njit(fastmath=True)
 def tether_dynamics_fast(t, X, p_arr):
     """
     Numba-JIT optimized core dynamics.
@@ -103,7 +103,10 @@ def tether_dynamics_fast(t, X, p_arr):
 
         # Atmospheric Drag (All nodes)
         b_vec, rho = get_environment_fast(r, v, t, p_arr)
-        v_rel = v # Simplified: assume static atmosphere
+        
+        # Earth rotation for relative wind
+        omega_e = 7.2921151467e-5
+        v_rel = v - np.cross(np.array([0.0, 0.0, omega_e]), r)
         v_rel_norm = np.linalg.norm(v_rel)
         
         # Calculate node-specific area
@@ -203,7 +206,7 @@ def tether_dynamics_fast(t, X, p_arr):
     
     return dX
 
-@njit
+@njit(fastmath=True)
 def compute_physics_metrics(t, X, p_arr):
     """
     Recalculates instantaneous physical metrics for telemetry.
@@ -234,7 +237,8 @@ def compute_physics_metrics(t, X, p_arr):
         b_vec, rho = get_environment_fast(r, v, t, p_arr)
         
         # Earth rotation for relative wind
-        v_rel = v - np.cross(np.array([0.0, 0.0, 7.2921159e-5]), r)
+        omega_e = 7.2921151467e-5
+        v_rel = v - np.cross(np.array([0.0, 0.0, omega_e]), r)
         v_rel_norm = np.linalg.norm(v_rel)
         
         # Area attribution
@@ -278,7 +282,7 @@ def compute_physics_metrics(t, X, p_arr):
 
     return i_dynamic, np.linalg.norm(total_lorentz_force), np.linalg.norm(total_drag_force)
 
-@njit
+@njit(fastmath=True)
 def tether_jacobian_fast(t, X, p_arr):
     """
     Numba-JIT optimized numerical Jacobian.

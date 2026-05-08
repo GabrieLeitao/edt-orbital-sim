@@ -154,7 +154,7 @@ def run_mission(skip_checkpoint=False, skip_test=False):
             print(f"CRITICAL: Simulation aborted during pre-flight. {msg}")
             return
 
-    t_end = 5400*8
+    t_end = 5400*4
     step_size = 500.0
     t_curr, X_curr = t_start, X0
     real_start = time.time()

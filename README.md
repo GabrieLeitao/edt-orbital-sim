@@ -17,24 +17,24 @@ The system is modeled as a chain of 13 point masses in Earth-Centered Inertial (
 
 ### 2. Environmental Forces
 - **Gravity (J2):** Includes Earth's central gravity and the **J2 perturbation** (zonal harmonic $J_2 = 1.0826 \times 10^{-3}$). This captures the primary orbital perturbations (nodal regression, perigee precession).
-- **Magnetic Field:** Implements a **Centered Dipole Model** aligned with Earth's rotation axis. 
-- **Atmospheric Drag:** Exponential model using a LEO reference (500km altitude) with a static atmosphere assumption.
+- **Magnetic Field:** Implements the **IGRF-2000 Model** (up to Degree 4). This captures the Earth's non-dipole components and the South Atlantic Anomaly (SAA), crucial for realistic Lorentz force calculations in LEO.
+- **Atmospheric Drag:** **Multi-layer Exponential Model** (Vallado/US Standard Atmosphere 1976) with **Harris-Priester Diurnal Bulge** correction and **Earth Rotation** (relative wind). This accounts for altitude-dependent scale heights and day/night density variations (2x-5x difference in LEO).
 
 ## Environmental Fidelity & Scientific Suitability
 
 ### Is this good for scientific orbital simulation?
-This engine is designed as a **high-fidelity multi-body dynamics simulator** for tethered systems, rather than a high-precision orbit propagator.
+This engine is designed as a **high-fidelity multi-body dynamics simulator** for tethered systems. With the recent integration of IGRF and multi-layer atmospheric models, it provides significant scientific value for LEO mission analysis.
 
 | Feature | Current Model | Scientific Requirement | Impact |
 | :--- | :--- | :--- | :--- |
 | **Gravity** | J2 (Oblateness) | EGM96 (70x70 harmonics) | J2 captures 99% of perturbations. Missing higher terms affects sub-meter precision over months. |
-| **Magnetic Field** | Simple Dipole | IGRF-13 | Dipole is ~10-20% off in certain regions. IGRF is required for precise Lorentz force predictions. |
-| **Atmosphere** | Exponential (Static) | NRLMSISE-00 / JB2008 | Static model misses diurnal/solar cycle variations. Drag errors can be 2-3x depending on solar activity. |
+| **Magnetic Field** | IGRF-2000 (Deg 4) | IGRF-13 | IGRF-2000 Deg 4 captures >99% of the field strength. Excellent for Lorentz force fidelity. |
+| **Atmosphere** | Multi-layer Exp + Bulge | NRLMSISE-00 | Current model captures primary altitude and diurnal trends. NRLMSISE adds solar flux (F10.7) sensitivity. |
 | **Third Body** | None | Sun/Moon/SRP | Required for high-altitude (MEO/GEO) or long-duration LEO missions. |
 
 **Verdict:** 
-- **For Tether Dynamics Research:** Excellent. The multi-body coupling, Rayleigh damping, and smooth-slack logic are state-of-the-art for studying libration, stability, and deployment.
-- **For Precision Navigation/POD:** Not suitable. The environmental errors (Dipole/Static Drag) exceed the requirements for Precise Orbit Determination.
+- **For Tether Dynamics & Deorbiting Research:** Excellent. The combination of multi-body coupling, material-specific damping, IGRF magnetic fields, and dynamic atmospheric density makes this a robust tool for studying EDT performance.
+- **For Precision Navigation:** Good, but requires EGM96 gravity and full IGRF-13/solar-flux models for centimeter-level accuracy over long epochs.
 
 ### Note: The "Snapping" & "Slingshot" Phenomenon
 If you observe the EDT "snapping" or "slingshotting" the spacecraft:
@@ -101,7 +101,8 @@ python3 -m venv .venv
 ## TODO
 - [x] plot current on EDT
 - [x] plot Lorentz force and air drag on same graph
-- altitude km throughout orbit
-3. test with higher sigmoid (25 vs 50)
-4. test implicit model w/ vs wo/ jacobian matrix 
-5. orbit inclination
+- [x] altitude km throughout orbit
+- [x] high-fidelity environment (IGRF + Multi-layer Drag)
+- [ ] test with higher sigmoid (25 vs 50)
+- [ ] test implicit model w/ vs wo/ jacobian matrix 
+- [ ] orbit inclination

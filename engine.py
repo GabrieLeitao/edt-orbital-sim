@@ -9,17 +9,14 @@ def setup_initial_state(params):
     """
     Sets up the initial state vector for the coupled multi-body system.
     
-    Mathematical Assumptions:
-    1. Radial Alignment: The system is initialized in a 'Gravity Gradient' stable configuration, 
-       stretching from the Tip Mass (closest to Earth) to the Target Satellite (highest altitude).
-    2. Circular Orbit Approximation: Initial velocities are based on Keplerian circular velocity 
-       at the target's altitude, adjusted linearly by the local orbital frequency (omega) 
-       across the tether length.
-    3. State Vector: $X = [r_0, r_1, ..., r_n, v_0, v_1, ..., v_n]^T$ where $n$ is the number of masses.
+    Mission Configuration: 'Perpendicular Rope'
+    1. SC and Target: Same altitude (a_init), separated by L_rope in-track.
+    2. EDT: Deployed radially inward from the Spacecraft.
+    3. Motion: Velocities initialized for circular orbit consistency across all nodes.
     
-    Configuration (Radial-Inward):
-    - Index 0: Tip Mass (Boom/Stabilizer)
-    - Index 1 to N_edt: EDT flexible beads (Lumped Mass Model)
+    Indices (Radial-Inward):
+    - Index 0: Tip Mass
+    - Index 1 to N_edt: EDT flexible beads
     - Index N_edt + 1: Spacecraft (SC)
     - Index N_edt + 2: Target Satellite
     """
@@ -27,37 +24,34 @@ def setup_initial_state(params):
     v_orb = np.sqrt(params.mu / a_init)
     omega = v_orb / a_init
     num_masses = params.num_masses
+    l_rope = params.L_rope
+    l_edt = params.L_edt
     
     pos = np.zeros((num_masses, 3))
     vel = np.zeros((num_masses, 3))
     
-    # Reference: Target at the highest point
-    r_target = np.array([a_init, 0.0, 0.0])
-    v_target = np.array([0.0, v_orb, 0.0])
+    # Target (Index N_edt + 2) at [a, 0, 0]
+    idx_target = params.N_edt + 2
+    pos[idx_target] = np.array([a_init, 0.0, 0.0])
+    vel[idx_target] = np.array([0.0, omega * a_init, 0.0])
     
-    # Tip (Index 0)
-    dist_tip = params.L_edt + params.L_rope
-    pos[0] = r_target - np.array([dist_tip, 0.0, 0.0])
-    vel[0] = v_target - np.array([0.0, omega * dist_tip, 0.0])
+    # Spacecraft (Index N_edt + 1) at [a, -L_rope, 0]
+    idx_sc = params.N_edt + 1
+    pos[idx_sc] = np.array([a_init, -l_rope, 0.0])
+    vel[idx_sc] = np.array([omega * l_rope, omega * a_init, 0.0])
     
-    # EDT beads (Index 1 to N_edt)
-    # Total segments in EDT chain = N_edt + 1
-    L0_seg = params.L_edt / (params.N_edt + 1)
+    # Tip (Index 0) at [a - L_edt, -L_rope, 0]
+    pos[0] = np.array([a_init - l_edt, -l_rope, 0.0])
+    vel[0] = np.array([omega * l_rope, omega * (a_init - l_edt), 0.0])
+    
+    # EDT beads (Index 1 to N_edt) distributed along the radial line at y = -L_rope
+    l0_seg = l_edt / (params.N_edt + 1)
     for i in range(1, params.N_edt + 1):
-        # Position is distance from target
-        # SC is at L_rope, so first bead is L_rope + L0_seg
-        # N_edt-th bead is L_rope + N_edt * L0_seg
-        dist = params.L_rope + (params.N_edt + 1 - i) * L0_seg
-        pos[i] = r_target - np.array([dist, 0.0, 0.0])
-        vel[i] = v_target - np.array([0.0, omega * dist, 0.0])
-        
-    # Spacecraft (Index N_edt + 1)
-    pos[params.N_edt + 1] = r_target - np.array([params.L_rope, 0.0, 0.0])
-    vel[params.N_edt + 1] = v_target - np.array([0.0, omega * params.L_rope, 0.0])
-    
-    # Target (Index N_edt + 2)
-    pos[params.N_edt + 2] = r_target
-    vel[params.N_edt + 2] = v_target
+        # distance below SC
+        h_below = (params.N_edt + 1 - i) * l0_seg
+        r_node = a_init - h_below
+        pos[i] = np.array([r_node, -l_rope, 0.0])
+        vel[i] = np.array([omega * l_rope, omega * r_node, 0.0])
     
     X0 = np.zeros(6 * num_masses)
     X0[:3*num_masses] = pos.flatten()
