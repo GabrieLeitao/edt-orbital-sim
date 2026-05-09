@@ -158,6 +158,9 @@ def run_mission(skip_checkpoint=False, skip_test=False):
     step_size = 500.0
     t_curr, X_curr = t_start, X0
     real_start = time.time()
+
+    method = 'RK45'
+    print(f"\n--- Starting Simulation ---\nMethod: {method}\nTotal Duration: {t_end/3600:.2f} hours\nCheckpointing: {'Disabled' if skip_checkpoint else 'Enabled'}\nPre-flight Test: {'Skipped' if skip_test else 'Enabled'}\n")
     
     # 3. Execution Phase (Segmented Integration Loop)
     with tqdm(total=int(t_end), initial=int(t_start), unit='s', desc="Mission Progress") as pbar:
@@ -165,7 +168,7 @@ def run_mission(skip_checkpoint=False, skip_test=False):
             t_next = min(t_curr + step_size, t_end)
             
             # Performance: Sampling at 1Hz prevents memory bloat (checkpoint stays < 10MB)
-            sol = integrate_system(X_curr, (t_curr, t_next), p_arr, desc="", pbar=pbar, sampling_hz=1.0)
+            sol = integrate_system(X_curr, (t_curr, t_next), p_arr, desc="", pbar=pbar, sampling_hz=1.0, method=method)
             
             # Segment Data
             seg_t = sol.t

@@ -38,15 +38,26 @@ def run_validation():
     # 1. Initialize
     X0 = setup_initial_state(params)
     
+    t_end = 10000
+    method = 'RK45'
+    print(f"\n--- Starting Validation ---\nMethod: {method}\nTotal Duration: {t_end/3600:.2f} hours\n")
+    
     # 2. Propagate
-    sol = integrate_system(X0, (0, 5400), p_arr, "Validating Physics", rtol=1e-7, atol=1e-9)
+    sol = integrate_system(X0, (0, t_end), p_arr, "Validating Physics", rtol=1e-7, atol=1e-9, sampling_hz=1.0, method=method)
     
     run_folder = get_results_folder("validation")
 
     # 3. Analyze & Export
-    energy, rope, edt, pitch = post_process_telemetry(sol.t, sol.y.T, p_arr, params)
+    telemetry = post_process_telemetry(sol.t, sol.y.T, p_arr, params)
+    energy = telemetry["energy_j"]
+    rope = telemetry["rope_l_m"]
+    edt = telemetry["edt_l_m"]
+    pitch = telemetry["pitch_deg"]
+
     rel_energy_error = (energy - energy[0]) / np.abs(energy[0])
-    save_csv("validation_results.csv", run_folder, sol.t, rel_energy_error, "rel_energy_error", sol.y.T, params)
+    telemetry["rel_energy_error"] = rel_energy_error
+
+    save_csv("validation_results.csv", run_folder, sol.t, telemetry, sol.y.T, params)
     
     # 4. Visualize
     plot_validation(run_folder, sol.t, energy, rope, pitch, edt, params)
