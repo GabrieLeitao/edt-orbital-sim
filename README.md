@@ -1,7 +1,7 @@
 # EDT Deorbiting Simulation: High-Fidelity Hybrid Multi-Body System
 
 ## Project Objective
-This project provides a high-fidelity Python simulation of an Active Debris Removal (ADR) mission. The scenario involves a **100kg Spacecraft (SC)** that has captured a **target satellite (800kg)** using a net and rope. To perform the deorbiting maneuver, the SC deploys a 2km **Electrodynamic Tether (EDT)** with a tip mass.
+This project provides a high-fidelity Python simulation of an Active Debris Removal (ADR) mission. The scenario involves a **100kg Spacecraft (SC)** that has captured a **target satellite** using a net and rope. To perform the deorbiting maneuver, the SC deploys a **Electrodynamic Tether (EDT)** with a tip mass.
 
 ## Mathematical Methods & High-Fidelity Assumptions
 
