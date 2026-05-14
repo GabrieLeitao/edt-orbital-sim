@@ -183,7 +183,7 @@ def save_csv(filename, run_folder, t_vals, telemetry_dict, X_vals, params, silen
     if not silent:
         print(f"Data {'appended' if append else 'saved'} to {filepath}")
 
-def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com, params, p_arr=None, is_final=False, silent=False):
+def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com, params, p_arr=None, is_final=False, silent=False, total_compute_time=0.0):
     """
     Saves simulation parameters and key results to a YAML file for easy reference.
     Differentiates between initial setup and final mission report.
@@ -198,7 +198,9 @@ def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com, param
         "com_sma_initial_m": float(initial_sma),
         "com_sma_final_m": float(final_sma),
         "com_sma_drop_m": float(sma_drop),
-        "simulation_time_s": float(t_vals[-1] - t_vals[0])
+        "simulation_time_s": float(t_vals[-1] - t_vals[0]),
+        "total_simulated_time_s": float(t_vals[-1]),
+        "total_compute_time_s": float(total_compute_time)
     }
 
     # Generate Hashes

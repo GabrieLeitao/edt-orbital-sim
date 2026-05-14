@@ -9,10 +9,14 @@ def setup_initial_state(params):
     """
     Sets up the initial state vector for the coupled multi-body system.
     
+    Supports:
+    - Inclination (params.inc)
+    - Eccentricity (params.e)
+    
     Mission Configuration: 'Perpendicular Rope'
     1. SC and Target: Same altitude (a_init), separated by L_rope in-track.
     2. EDT: Deployed radially inward from the Spacecraft.
-    3. Motion: Velocities initialized for circular orbit consistency across all nodes.
+    3. Motion: Velocities initialized for consistency with the orbital plane.
     
     Indices (Radial-Inward):
     - Index 0: Tip Mass
@@ -20,45 +24,70 @@ def setup_initial_state(params):
     - Index N_edt + 1: Spacecraft (SC)
     - Index N_edt + 2: Target Satellite
     """
-    a_init = params.R_e + params.alt
-    v_orb = np.sqrt(params.mu / a_init)
-    omega = v_orb / a_init
+    # 1. Basic Orbital Parameters
+    a = params.R_e + params.alt
+    e = params.e
+    inc = params.inc
+    mu = params.mu
+    
+    # Target at Periapsis for simplicity if e > 0
+    r_p = a * (1.0 - e)
+    v_p = np.sqrt(mu / a * (1.0 + e) / (1.0 - e))
+    omega = v_p / r_p # Instantaneous angular velocity at periapsis
+    
     num_masses = params.num_masses
     l_rope = params.L_rope
     l_edt = params.L_edt
     
-    pos = np.zeros((num_masses, 3))
-    vel = np.zeros((num_masses, 3))
+    # 2. Define state in 'Orbital Plane' (X=Radial, Y=In-Track, Z=Cross-Track)
+    # This frame has Z along angular momentum.
+    pos_orb = np.zeros((num_masses, 3))
+    vel_orb = np.zeros((num_masses, 3))
     
-    # Target (Index N_edt + 2) at [a, 0, 0]
+    # Target (Index N_edt + 2) at [r_p, 0, 0]
     idx_target = params.N_edt + 2
-    pos[idx_target] = np.array([a_init, 0.0, 0.0])
-    vel[idx_target] = np.array([0.0, omega * a_init, 0.0])
+    pos_orb[idx_target] = np.array([r_p, 0.0, 0.0])
+    vel_orb[idx_target] = np.array([0.0, v_p, 0.0])
     
-    # Spacecraft (Index N_edt + 1) at [a, -L_rope, 0]
+    # Spacecraft (Index N_edt + 1) at [r_p, -L_rope, 0]
     idx_sc = params.N_edt + 1
-    pos[idx_sc] = np.array([a_init, -l_rope, 0.0])
-    vel[idx_sc] = np.array([omega * l_rope, omega * a_init, 0.0])
+    pos_orb[idx_sc] = np.array([r_p, -l_rope, 0.0])
+    # Velocity includes the 'swing' term for the in-track separation
+    vel_orb[idx_sc] = np.array([omega * l_rope, v_p, 0.0])
     
-    # Tip (Index 0) at [a - L_edt, -L_rope, 0]
-    pos[0] = np.array([a_init - l_edt, -l_rope, 0.0])
-    vel[0] = np.array([omega * l_rope, omega * (a_init - l_edt), 0.0])
+    # Tip (Index 0) at [r_p - L_edt, -L_rope, 0]
+    pos_orb[0] = np.array([r_p - l_edt, -l_rope, 0.0])
+    vel_orb[0] = np.array([omega * l_rope, omega * (r_p - l_edt), 0.0])
     
     # EDT beads (Index 1 to N_edt) distributed along the radial line at y = -L_rope
     l0_seg = l_edt / (params.N_edt + 1)
     for i in range(1, params.N_edt + 1):
         # distance below SC
         h_below = (params.N_edt + 1 - i) * l0_seg
-        r_node = a_init - h_below
-        pos[i] = np.array([r_node, -l_rope, 0.0])
-        vel[i] = np.array([omega * l_rope, omega * r_node, 0.0])
+        r_node = r_p - h_below
+        pos_orb[i] = np.array([r_node, -l_rope, 0.0])
+        vel_orb[i] = np.array([omega * l_rope, omega * r_node, 0.0])
+        
+    # 3. Rotate from Orbital Plane to ECI based on Inclination
+    # We assume the initial position is at the Ascending Node (RAAN=0, arg_per=0)
+    # Rotation matrix around X-axis (Line of Nodes)
+    cos_i = np.cos(inc)
+    sin_i = np.sin(inc)
+    R_inc = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, cos_i, -sin_i],
+        [0.0, sin_i, cos_i]
+    ])
+    
+    pos = np.dot(pos_orb, R_inc.T)
+    vel = np.dot(vel_orb, R_inc.T)
     
     X0 = np.zeros(6 * num_masses)
     X0[:3*num_masses] = pos.flatten()
     X0[3*num_masses:] = vel.flatten()
     return X0
 
-def save_checkpoint(run_folder, t, X, p_arr, history_t=None, history_X=None):
+def save_checkpoint(run_folder, t, X, p_arr, history_t=None, history_X=None, total_compute_time=0.0):
     """
     Saves the current state and accumulated history to a binary checkpoint.
     Performance: Using .npz for fast binary I/O of history arrays.
@@ -70,7 +99,8 @@ def save_checkpoint(run_folder, t, X, p_arr, history_t=None, history_X=None):
     save_args = {
         "t": t, "X": X, "p_arr": p_arr, "p_hash": p_hash,
         "history_t": history_t if history_t is not None else np.array([]),
-        "history_X": history_X if history_X is not None else np.array([])
+        "history_X": history_X if history_X is not None else np.array([]),
+        "total_compute_time": total_compute_time
     }
     np.savez(checkpoint_path, **save_args)
     
@@ -80,7 +110,7 @@ def save_checkpoint(run_folder, t, X, p_arr, history_t=None, history_X=None):
 def load_checkpoint(run_folder):
     """
     Loads state and history from binary checkpoint.
-    Returns (t, X, p_arr, p_hash, history_t, history_X).
+    Returns (t, X, p_arr, p_hash, history_t, history_X, total_compute_time).
     """
     checkpoint_path = os.path.join(run_folder, "checkpoint.npz")
     if os.path.exists(checkpoint_path):
@@ -88,8 +118,9 @@ def load_checkpoint(run_folder):
         p_hash = str(data['p_hash']) if 'p_hash' in data.files else None
         h_t = data['history_t'] if 'history_t' in data.files else None
         h_X = data['history_X'] if 'history_X' in data.files else None
-        return float(data['t']), data['X'], data['p_arr'], p_hash, h_t, h_X
-    return None, None, None, None, None, None
+        total_compute_time = float(data['total_compute_time']) if 'total_compute_time' in data.files else 0.0
+        return float(data['t']), data['X'], data['p_arr'], p_hash, h_t, h_X, total_compute_time
+    return None, None, None, None, None, None, 0.0
 
 def integrate_system(X0, t_span, p_arr, desc, rtol=1e-7, atol=1e-9, pbar=None, sampling_hz=1.0, method='RK45'):
     """
@@ -122,7 +153,7 @@ def integrate_system(X0, t_span, p_arr, desc, rtol=1e-7, atol=1e-9, pbar=None, s
     # method='LSODA' handles stiff aluminum EDT dynamics efficiently
     # Providing the jitted Jacobian (jac) significantly speeds up convergence.
     sol = solve_ivp(wrapped_dynamics, (t0, tf), X0, method=method, 
-                    # jac=lambda t, y: tether_jacobian_fast(t, y, p_arr),
+                    jac=lambda t, y: tether_jacobian_fast(t, y, p_arr),
                     t_eval=t_eval, rtol=rtol, atol=atol)
 
     if local_pbar[0] is not None:

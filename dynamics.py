@@ -71,6 +71,13 @@ def tether_dynamics_fast(t, X, p_arr):
 
     accel = np.zeros((num_masses, 3))
     
+    # 0. Pre-calculate Earth rotation components once per call
+    omega_e = 7.2921151467e-5
+    theta_g0 = 0.0 
+    theta_gmst = (theta_g0 + omega_e * t) % (2 * np.pi)
+    cos_tg = np.cos(theta_gmst)
+    sin_tg = np.sin(theta_gmst)
+    
     # 1. Gravity, J2 & Atmospheric Drag
     mu = p_arr[p.IDX_MU]
     re = p_arr[p.IDX_RE]
@@ -82,6 +89,8 @@ def tether_dynamics_fast(t, X, p_arr):
     diam_rope = p_arr[p.IDX_DIAM_ROPE]
     l_rope = p_arr[p.IDX_L_ROPE]
     l0_edt_seg = p_arr[p.IDX_L_EDT] / (n_edt + 1)
+    
+    from environment import get_environment_optimized
     
     for i in range(num_masses):
         r = pos[i]
@@ -102,10 +111,11 @@ def tether_dynamics_fast(t, X, p_arr):
         accel[i, 2] = a_g[2] + pref * r[2] * (5 * z2 / r2 - 3)
 
         # Atmospheric Drag (All nodes)
-        b_vec, rho = get_environment_fast(r, v, t, p_arr)
+        # Optimized: only need rho for drag, but B is used for Lorentz later.
+        # However, for simplicity and to match the physics, we get both.
+        _, rho = get_environment_optimized(r, v, t, p_arr, cos_tg, sin_tg)
         
-        # Earth rotation for relative wind
-        omega_e = 7.2921151467e-5
+        # Relative wind
         v_rel = v - np.cross(np.array([0.0, 0.0, omega_e]), r)
         v_rel_norm = np.linalg.norm(v_rel)
         
@@ -115,10 +125,8 @@ def tether_dynamics_fast(t, X, p_arr):
         elif i <= n_edt: # Beads
             node_area = l0_edt_seg * diam_edt
         elif i == n_edt + 1: # SC
-            # SC takes half of last EDT segment AND half of the rope
             node_area = area + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
         else: # Target
-            # Target takes its area AND half of the rope
             node_area = area + 0.5 * l_rope * diam_rope
 
         if v_rel_norm > 1e-3:
@@ -126,38 +134,32 @@ def tether_dynamics_fast(t, X, p_arr):
             accel[i] += f_drag / get_mass_fast(i, p_arr, num_masses)
 
     # 2. Internal Forces (Tension) - EDT (SC-Tip)
-    # k = E * A / L_seg
     k_edt_seg = (p_arr[p.IDX_E_EDT] * area_edt) / l0_edt_seg
     beta_edt = p_arr[p.IDX_BETA_EDT]
     
-    # PASS 1: Calculate Motional EMF across all EDT segments
+    # PASS 1: Calculate Motional EMF and store B-fields for segments
     v_total_emf = 0.0
+    b_fields = np.zeros((n_edt + 1, 3))
     for j in range(n_edt + 1):
-        p_a = pos[j]
-        p_b = pos[j+1]
-        v_a = vel[j]
-        v_b = vel[j+1]
+        p_a = pos[j]; p_b = pos[j+1]
+        v_a = vel[j]; v_b = vel[j+1]
         
         r_seg = p_b - p_a
         v_mid = (v_a + v_b) / 2.0
         r_mid = (p_a + p_b) / 2.0
         
-        b_vec, rho = get_environment_fast(r_mid, v_mid, t, p_arr)
+        b_vec, _ = get_environment_optimized(r_mid, v_mid, t, p_arr, cos_tg, sin_tg)
+        b_fields[j] = b_vec
         
-        # V_emf = (v x B) . L
         v_induced = np.dot(np.cross(v_mid, b_vec), r_seg)
         v_total_emf += v_induced
         
-    # Calculate Dynamic Current: I = V_emf / R_total
-    # R_total = R_wire + Z_plasma + R_load
     i_dynamic = v_total_emf / p_arr[p.IDX_R_TOTAL]
     
     # PASS 2: Apply Tension and Lorentz Forces
     for j in range(n_edt + 1):
-        p_a = pos[j]
-        p_b = pos[j+1]
-        v_a = vel[j]
-        v_b = vel[j+1]
+        p_a = pos[j]; p_b = pos[j+1]
+        v_a = vel[j]; v_b = vel[j+1]
         
         r_seg = p_b - p_a
         v_seg = v_b - v_a
@@ -165,7 +167,6 @@ def tether_dynamics_fast(t, X, p_arr):
         l_seg_safe = max(l_seg, 1e-6)
         l_dot_seg = np.dot(r_seg, v_seg) / l_seg_safe
         
-        # Calculate Tension with Rayleigh Damping and Smooth Slack
         t_seg = smooth_tension(l_seg - l0_edt_seg, l_dot_seg, k_edt_seg, beta_edt)
         f_t_seg = (t_seg / l_seg_safe) * r_seg
         
@@ -175,11 +176,8 @@ def tether_dynamics_fast(t, X, p_arr):
         accel[j] += f_t_seg / m_a
         accel[j+1] -= f_t_seg / m_b
         
-        # 3. Lorentz Force (Applied to EDT segments: Tip to SC)
-        # Using the dynamically calculated current from Motional EMF
-        b_vec, rho = get_environment_fast((p_a + p_b)/2.0, (v_a + v_b)/2.0, t, p_arr)
-        f_l = i_dynamic * np.cross(r_seg, b_vec)
-        
+        # Lorentz Force using pre-calculated B-field
+        f_l = i_dynamic * np.cross(r_seg, b_fields[j])
         accel[j] += 0.5 * f_l / m_a
         accel[j+1] += 0.5 * f_l / m_b
 
@@ -191,8 +189,6 @@ def tether_dynamics_fast(t, X, p_arr):
     l_r = np.linalg.norm(r_rope)
     l_r_safe = max(l_r, 1e-6)
     l_dot_r = np.dot(r_rope, v_rope) / l_r_safe
-    
-    # Calculate Rope Stiffness
     
     t_r = smooth_tension(l_r - p_arr[p.IDX_L_ROPE], l_dot_r, p_arr[p.IDX_K_ROPE], p_arr[p.IDX_BETA_ROPE])
     f_t_r = (t_r / l_r_safe) * r_rope
@@ -209,18 +205,25 @@ def tether_dynamics_fast(t, X, p_arr):
 @njit(fastmath=True)
 def compute_physics_metrics(t, X, p_arr):
     """
-    Recalculates instantaneous physical metrics for telemetry.
-    Returns: (Current [A], Total Lorentz Force [N], Total Drag Force [N])
+    Optimized physical metrics calculation.
     """
     n_edt = int(p_arr[p.IDX_N_EDT])
     num_masses = 3 + n_edt
     
-    # Ensure contiguity for Numba's reshape
     X_pos_slice = np.ascontiguousarray(X[:3*num_masses])
     pos = X_pos_slice.reshape((num_masses, 3))
     X_vel_slice = np.ascontiguousarray(X[3*num_masses:])
     vel = X_vel_slice.reshape((num_masses, 3))
     
+    # Earth rotation components
+    omega_e = 7.2921151467e-5
+    theta_g0 = 0.0 
+    theta_gmst = (theta_g0 + omega_e * t) % (2 * np.pi)
+    cos_tg = np.cos(theta_gmst)
+    sin_tg = np.sin(theta_gmst)
+    
+    from environment import get_environment_optimized
+
     cd = p_arr[p.IDX_CD]
     area_sc = p_arr[p.IDX_AREA]
     diam_edt = p_arr[p.IDX_DIAM_EDT]
@@ -228,57 +231,41 @@ def compute_physics_metrics(t, X, p_arr):
     l_rope = p_arr[p.IDX_L_ROPE]
     l0_edt_seg = p_arr[p.IDX_L_EDT] / (n_edt + 1)
     
-    # 1. Drag Calculation (Total System)
+    # 1. Drag Calculation
     total_drag_force = np.zeros(3)
     for i in range(num_masses):
-        r = pos[i]
-        v = vel[i]
-        # Environment at current node
-        b_vec, rho = get_environment_fast(r, v, t, p_arr)
+        r = pos[i]; v = vel[i]
+        _, rho = get_environment_optimized(r, v, t, p_arr, cos_tg, sin_tg)
         
-        # Earth rotation for relative wind
-        omega_e = 7.2921151467e-5
         v_rel = v - np.cross(np.array([0.0, 0.0, omega_e]), r)
         v_rel_norm = np.linalg.norm(v_rel)
         
-        # Area attribution
-        if i == n_edt + 2: # Target
-            node_area = area_sc + 0.5 * l_rope * diam_rope
-        elif i == n_edt + 1: # SC
-            node_area = area_sc + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
-        elif i == 0: # Tip
-            node_area = p_arr[p.IDX_AREA_TIP] + 0.5 * l0_edt_seg * diam_edt
-        else: # EDT Bead
-            node_area = diam_edt * l0_edt_seg
+        if i == n_edt + 2: node_area = area_sc + 0.5 * l_rope * diam_rope
+        elif i == n_edt + 1: node_area = area_sc + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
+        elif i == 0: node_area = p_arr[p.IDX_AREA_TIP] + 0.5 * l0_edt_seg * diam_edt
+        else: node_area = diam_edt * l0_edt_seg
             
-        f_drag = -0.5 * rho * cd * node_area * v_rel_norm * v_rel
-        total_drag_force += f_drag
+        total_drag_force -= 0.5 * rho * cd * node_area * v_rel_norm * v_rel
 
     # 2. Current and Lorentz Calculation
     v_total_emf = 0.0
-    for j in range(n_edt + 1):
-        p_a = pos[j]
-        p_b = pos[j+1]
-        v_a = vel[j]
-        v_b = vel[j+1]
-        
-        r_seg = p_b - p_a
-        v_mid = (v_a + v_b) / 2.0
-        r_mid = (p_a + p_b) / 2.0
-        
-        b_vec, rho = get_environment_fast(r_mid, v_mid, t, p_arr)
-        v_induced = np.dot(np.cross(v_mid, b_vec), r_seg)
-        v_total_emf += v_induced
-        
-    i_dynamic = v_total_emf / p_arr[p.IDX_R_TOTAL]
-    
     total_lorentz_force = np.zeros(3)
     for j in range(n_edt + 1):
         p_a = pos[j]; p_b = pos[j+1]
         r_seg = p_b - p_a
-        b_vec, _ = get_environment_fast((p_a + p_b)/2.0, (vel[j] + vel[j+1])/2.0, t, p_arr)
-        f_l = i_dynamic * np.cross(r_seg, b_vec)
-        total_lorentz_force += f_l
+        v_mid = (vel[j] + vel[j+1]) / 2.0
+        r_mid = (p_a + p_b) / 2.0
+        
+        b_vec, _ = get_environment_optimized(r_mid, v_mid, t, p_arr, cos_tg, sin_tg)
+        v_total_emf += np.dot(np.cross(v_mid, b_vec), r_seg)
+        
+    i_dynamic = v_total_emf / p_arr[p.IDX_R_TOTAL]
+    
+    for j in range(n_edt + 1):
+        p_a = pos[j]; p_b = pos[j+1]
+        r_seg = p_b - p_a
+        b_vec, _ = get_environment_optimized((p_a + p_b)/2.0, (vel[j] + vel[j+1])/2.0, t, p_arr, cos_tg, sin_tg)
+        total_lorentz_force += i_dynamic * np.cross(r_seg, b_vec)
 
     return i_dynamic, np.linalg.norm(total_lorentz_force), np.linalg.norm(total_drag_force)
 

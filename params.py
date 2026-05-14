@@ -8,13 +8,13 @@ class SimulationParams:
         self.J2 = 1.08263e-3          # J2 perturbation coefficient
 
         # 2. System Masses [kg]
-        self.m_target = 800.0         # Target satellite mass
+        self.m_target = 500.0         # Target satellite mass
         self.m_sc = 100.0             # Our spacecraft mass
         self.m_tip = 2.0             # EDT tip mass (boom/weight)
         self.area_tip = 0.1          # Tip mass drag area [m^2] (10cm x 10cm)
 
         # 3. Tether Properties (Rope: Target-SC)
-        self.L_rope = 25.0            # Nominal rope length [m]
+        self.L_rope = 10.0            # Nominal rope length [m]
         self.E_rope = 100e9           # Young's Modulus (Kevlar) [Pa]
         self.diam_rope = 0.002        # 2mm rope
         
@@ -28,7 +28,7 @@ class SimulationParams:
 
         # 4. EDT Properties (SC-Tip)
         self.L_edt = 200.0            # Total EDT length [m]
-        self.N_edt = 5#10               # Number of segments
+        self.N_edt = 3#10               # Number of segments
         self.E_edt = 70e9             # Young's Modulus (Aluminum) [Pa]
         self.diam_edt = 0.0015        # 1.5mm wire
         self.rho_aluminum = 2700.0    # Aluminum density [kg/m^3]

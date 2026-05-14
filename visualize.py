@@ -57,11 +57,22 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         with open(yaml_path, 'r') as f:
             config = yaml.safe_load(f)
             
-        # Safely extract the run_id we added earlier
-        run_id = config.get("metadata", {}).get("run_id", "Unknown Run ID")
-        desc = config.get("metadata", {}).get("description", "N/A")
+        # Safely extract mission metadata
+        metadata = config.get("metadata", {})
+        results = config.get("results", {})
+        run_id = metadata.get("run_id", "Unknown Run ID")
+        desc = metadata.get("description", "N/A")
+        
+        # New cumulative stats
+        total_comp = results.get("total_compute_time_s", 0.0)
+        total_sim = results.get("total_simulated_time_s", 0.0)
+        
         print(f"Config loaded: {yaml_files[0]}")
         print(f"Run ID: {run_id} | {desc}")
+        if total_comp > 0:
+            print(f"Total Compute Time (All Sessions): {total_comp/60:.2f} minutes")
+        if total_sim > 0:
+            print(f"Total Simulated Time: {total_sim/3600:.2f} hours")
     else:
         print("No YAML configuration file found in this folder.")
         config = None
@@ -158,15 +169,30 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
     u, v = np.mgrid[0:2*np.pi:30j, 0:np.pi:15j]
     ax_orbit.plot_wireframe(re*np.cos(u)*np.sin(v), re*np.sin(u)*np.sin(v), re*np.cos(v), color="blue", alpha=0.05)
     
-    # Equator Line
+    # Equator Line (Reference)
     theta = np.linspace(0, 2*np.pi, 100)
-    ax_orbit.plot(re*np.cos(theta), re*np.sin(theta), 0, color="blue", lw=2, alpha=0.3, label="Equator")
+    ax_orbit.plot(re*np.cos(theta), re*np.sin(theta), 0, color="blue", lw=1, alpha=0.2, label="Equator")
+    
+    # Nominal Orbital Plane
+    # Create circle in XY, then rotate by inclination around X-axis
+    r_orbit_nominal = re + params.alt
+    orbit_plane_x = r_orbit_nominal * np.cos(theta)
+    orbit_plane_y_raw = r_orbit_nominal * np.sin(theta)
+    
+    # Rotation by inc around X
+    cos_i = np.cos(params.inc)
+    sin_i = np.sin(params.inc)
+    orbit_plane_y = orbit_plane_y_raw * cos_i
+    orbit_plane_z = orbit_plane_y_raw * sin_i
+    
+    ax_orbit.plot(orbit_plane_x, orbit_plane_y, orbit_plane_z, color="red", lw=2, alpha=0.3, ls=':', label="Nominal Plane")
     
     # ECI Reference Frame Axes
     ax_orbit.set_xlabel("X (ECI) [m]")
     ax_orbit.set_ylabel("Y (ECI) [m]")
     ax_orbit.set_zlabel("Z (ECI) [m]")
     ax_orbit.view_init(elev=20, azim=45) 
+    ax_orbit.legend(loc='upper right', fontsize='small')
 
     # Sat + Target Elements (2D)
     line_st_rope, = ax_sat_target.plot([], [], 'k-', lw=2)

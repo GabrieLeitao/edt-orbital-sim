@@ -87,11 +87,11 @@ def handle_mission_resumption():
     """Manages the logic for resuming an interrupted simulation."""
     resumable_runs = find_resumable_runs()
     if not resumable_runs:
-        return None, 0.0, None, None, [], []
+        return None, 0.0, None, None, [], [], 0.0
 
     use_checkpoint = questionary.confirm("Found resumable runs. Would you like to resume?").ask()
     if not use_checkpoint:
-        return None, 0.0, None, None, [], []
+        return None, 0.0, None, None, [], [], 0.0
 
     run_name = questionary.select("Select run to resume:", choices=resumable_runs).ask()
     run_folder = os.path.join('results', run_name)
@@ -99,16 +99,16 @@ def handle_mission_resumption():
     yaml_path = os.path.join(run_folder, "config_params_results.yaml")
     if not os.path.exists(yaml_path):
         print(f"Error: YAML configuration missing for {run_name}. Cannot resume safely.")
-        return None, 0.0, None, None, [], []
+        return None, 0.0, None, None, [], [], 0.0
 
     params = SimulationParams.from_yaml(yaml_path)
     p_hash_curr = hashlib.sha256(params.to_numba_params().tobytes()).hexdigest()
     
-    t_s, X0, p_flat, p_hash_stored, h_t, h_X = load_checkpoint(run_folder)
+    t_s, X0, p_flat, p_hash_stored, h_t, h_X, total_comp = load_checkpoint(run_folder)
     
     if p_hash_stored and p_hash_curr != p_hash_stored:
         print(f"CRITICAL ERROR: Parameter mismatch detected! Aborting.")
-        return None, 0.0, None, None, [], []
+        return None, 0.0, None, None, [], [], 0.0
 
     # History recovery (Binary primary, CSV fallback)
     if h_t is not None and len(h_t) > 0:
@@ -120,7 +120,7 @@ def handle_mission_resumption():
         all_t.pop(); all_X.pop()
 
     print(f"Resuming mission from t = {t_s:.1f}s")
-    return run_folder, t_s, X0, params, all_t, all_X
+    return run_folder, t_s, X0, params, all_t, all_X, total_comp
 
 def initialize_new_mission():
     """Sets up a fresh simulation run."""
@@ -136,14 +136,14 @@ def initialize_new_mission():
     save_config_params_results_yaml("config_params_results.yaml", run_folder, dummy_t, dummy_sma, params, params.to_numba_params())
     
     print(f"Starting new simulation: {run_name}")
-    return run_folder, 0.0, X0, params, [], []
+    return run_folder, 0.0, X0, params, [], [], 0.0
 
 def run_mission(skip_checkpoint=False, skip_test=False):
     """Main Orchestrator following KSRP principles."""
     # 1. Setup Phase
-    rf, t_start, X0, params, all_t, all_X = handle_mission_resumption()
+    rf, t_start, X0, params, all_t, all_X, comp_prev = handle_mission_resumption()
     if rf is None: # New run
-        rf, t_start, X0, params, all_t, all_X = initialize_new_mission()
+        rf, t_start, X0, params, all_t, all_X, comp_prev = initialize_new_mission()
 
     p_arr = params.to_numba_params()
     
@@ -154,12 +154,12 @@ def run_mission(skip_checkpoint=False, skip_test=False):
             print(f"CRITICAL: Simulation aborted during pre-flight. {msg}")
             return
 
-    t_end = 5400*4
+    t_end = 5400 * 20 # Simulate for 10 orbits (~9 hours)
     step_size = 500.0
     t_curr, X_curr = t_start, X0
-    real_start = time.time()
+    session_start = time.time()
 
-    method = 'RK45'
+    method = 'LSODA'
     print(f"\n--- Starting Simulation ---\nMethod: {method}\nTotal Duration: {t_end/3600:.2f} hours\nCheckpointing: {'Disabled' if skip_checkpoint else 'Enabled'}\nPre-flight Test: {'Skipped' if skip_test else 'Enabled'}\n")
     
     # 3. Execution Phase (Segmented Integration Loop)
@@ -187,8 +187,11 @@ def run_mission(skip_checkpoint=False, skip_test=False):
             if not skip_checkpoint:
                 pbar.set_postfix_str("Checkpointing...")
                 
+                # Update cumulative compute time
+                total_comp = comp_prev + (time.time() - session_start)
+                
                 # Checkpoint keeps full history for lossless resume
-                save_checkpoint(rf, t_curr, X_curr, p_arr, np.array(all_t), np.array(all_X))
+                save_checkpoint(rf, t_curr, X_curr, p_arr, np.array(all_t), np.array(all_X), total_compute_time=total_comp)
                 
                 # Performance: Append only the NEW segment to CSV to avoid RAM spikes
                 tel_seg = post_process_telemetry(np.array(seg_t), np.array(seg_X), p_arr, params)
@@ -197,10 +200,15 @@ def run_mission(skip_checkpoint=False, skip_test=False):
                 pbar.set_postfix_str("")
 
     # 3. Finalization Phase
-    print(f"\n--- Mission Complete ---\nTotal Compute Time: {(time.time() - real_start)/60:.2f} minutes")
+    total_compute_time = comp_prev + (time.time() - session_start)
+    print(f"\n--- Mission Complete ---")
+    print(f"Session Compute Time: {(time.time() - session_start)/60:.2f} minutes")
+    print(f"Total Compute Time (All Sessions): {total_compute_time/60:.2f} minutes")
+    print(f"Total Simulated Time: {t_curr/3600:.2f} hours")
+
     all_t, all_X = np.array(all_t), np.array(all_X)
     sma_final = calculate_com_sma(all_t, all_X, p_arr, params)
-    save_config_params_results_yaml("config_params_results.yaml", rf, all_t, sma_final, params, p_arr, is_final=True)
+    save_config_params_results_yaml("config_params_results.yaml", rf, all_t, sma_final, params, p_arr, is_final=True, total_compute_time=total_compute_time)
     plot_simulation(all_t, sma_final, all_X, params, rf)
 
 def parse_arguments():
