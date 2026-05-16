@@ -43,7 +43,12 @@ If you observe the EDT "snapping" or "slingshotting" the spacecraft:
 3. **Remedy:** Reduce `I_edt` in `params.py` or increase `beta_edt` (damping) to stabilize the system.
 
 ### 3. Numerical Integration
-Solved using **`scipy.integrate.solve_ivp`** with the **LSODA** method. The solver is tuned for the "stiff" equations of motion characteristic of high-tension tethered systems.
+Two compiled integrators live in `integrators.py`; both keep the integration loop entirely outside the Python interpreter, eliminating the per-RHS-call overhead that dominated the previous `scipy.solve_ivp` profile.
+
+- **`RK45`** (default): Adaptive Dormand-Prince 5(4) implemented in pure `@njit`, with FSAL and cubic-Hermite dense output. Best for the smooth-orbit regime — roughly 2× faster than the previous scipy RK45 path.
+- **`LSODA`**: numbalsoda's compiled LSODA, called via a `@cfunc` RHS adapter. Implicit BDF for the stiff aluminum EDT modes. Currently uses LSODA's internal numerical Jacobian — slower than RK45 on this problem until an analytic Jacobian is plumbed through.
+
+`engine.py:integrate_system` dispatches on the `method=` argument and sub-chunks the span so tqdm ticks roughly every 100 s of simulated time without breaking the compiled loop. Checkpoint state is signaled via `pbar.set_postfix_str(...)` on the same shared bar.
 
 ## File Structure
 - `params.py`: Configuration for material properties (Young's Modulus, damping constants) and system masses.
@@ -86,6 +91,11 @@ python3 -m venv .venv
    ```bash
    python simulate.py --no-test
    ```
+   **Select integrator:**
+   ```bash
+   python simulate.py --method RK45    # Numba Dormand-Prince 5(4), default
+   python simulate.py --method LSODA   # numbalsoda LSODA (implicit, for stiff regimes)
+   ```
 3. **Visualize**:
    ```bash
    python visualize.py
@@ -104,5 +114,6 @@ python3 -m venv .venv
 - [x] altitude km throughout orbit
 - [x] high-fidelity environment (IGRF + Multi-layer Drag)
 - [ ] test with higher sigmoid (25 vs 50)
-- [ ] test implicit model w/ vs wo/ jacobian matrix 
-- [ ] orbit inclination
+- [ ] test implicit model w/ vs wo/ jacobian matrix (LSODA via numbalsoda needs analytic Jacobian wired through `@cfunc`)
+- [x] orbit inclination
+- [x] compiled integration loop (Numba RK45 + numbalsoda LSODA)

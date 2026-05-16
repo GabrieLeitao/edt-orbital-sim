@@ -1,6 +1,7 @@
 import numpy as np
 import time
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 from params import SimulationParams
 from engine import setup_initial_state, integrate_system
 from analysis import calculate_com_sma
@@ -27,7 +28,9 @@ def run_convergence():
         X0 = setup_initial_state(params)
         
         start_time = time.time()
-        sol = integrate_system(X0, (0, t_end), p_arr, f"N={n}", rtol=1e-7, atol=1e-9, method=method)
+        with tqdm(total=int(t_end), unit='s', desc=f"N={n}") as pbar:
+            sol = integrate_system(X0, (0, t_end), p_arr, rtol=1e-7, atol=1e-9,
+                                   pbar=pbar, method=method)
         end_time = time.time()
         
         comp_time = end_time - start_time

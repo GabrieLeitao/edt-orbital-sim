@@ -1,4 +1,5 @@
 import numpy as np
+from tqdm import tqdm
 from engine import integrate_system
 import params as p
 
@@ -128,7 +129,9 @@ def run_preflight_stability_check(X0, p_arr, params, duration=300.0):
     p_stressed[p.IDX_CD] = 4.0     # Extreme drag
     
     try:
-        sol = integrate_system(X_stressed, (0, duration), p_stressed, desc="Worst-Case Test", sampling_hz=20.0)
+        with tqdm(total=int(duration), unit='s', desc="Worst-Case Test") as pbar:
+            sol = integrate_system(X_stressed, (0, duration), p_stressed,
+                                   pbar=pbar, sampling_hz=20.0)
     except Exception as e:
         return False, f"Solver crashed during stress test: {e}"
     

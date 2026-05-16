@@ -1,7 +1,8 @@
 import numpy as np
 from numba import njit
 import params as p
-from environment import get_environment_fast
+from environment import get_environment_optimized
+from frames import get_earth_rotation_components
 
 @njit(fastmath=True)
 def get_mass_fast(idx, p_arr, num_masses):
@@ -90,8 +91,6 @@ def tether_dynamics_fast(t, X, p_arr):
     l_rope = p_arr[p.IDX_L_ROPE]
     l0_edt_seg = p_arr[p.IDX_L_EDT] / (n_edt + 1)
     
-    from environment import get_environment_optimized
-    
     for i in range(num_masses):
         r = pos[i]
         v = vel[i]
@@ -100,9 +99,8 @@ def tether_dynamics_fast(t, X, p_arr):
         # Basic Gravity: -mu/r^3 * r
         a_g = -mu / r_norm**3 * r
         
-        # J2 Perturbation
-        z = r[2]
-        z2 = z**2
+        # J2
+        z2 = r[2]**2
         r2 = r_norm**2
         pref = 1.5 * j2 * mu * re**2 / r_norm**5
         
@@ -142,27 +140,20 @@ def tether_dynamics_fast(t, X, p_arr):
     b_fields = np.zeros((n_edt + 1, 3))
     for j in range(n_edt + 1):
         p_a = pos[j]; p_b = pos[j+1]
-        v_a = vel[j]; v_b = vel[j+1]
-        
         r_seg = p_b - p_a
-        v_mid = (v_a + v_b) / 2.0
+        v_mid = (vel[j] + vel[j+1]) / 2.0
         r_mid = (p_a + p_b) / 2.0
-        
         b_vec, _ = get_environment_optimized(r_mid, v_mid, t, p_arr, cos_tg, sin_tg)
         b_fields[j] = b_vec
-        
-        v_induced = np.dot(np.cross(v_mid, b_vec), r_seg)
-        v_total_emf += v_induced
+        v_total_emf += np.dot(np.cross(v_mid, b_vec), r_seg)
         
     i_dynamic = v_total_emf / p_arr[p.IDX_R_TOTAL]
     
     # PASS 2: Apply Tension and Lorentz Forces
     for j in range(n_edt + 1):
         p_a = pos[j]; p_b = pos[j+1]
-        v_a = vel[j]; v_b = vel[j+1]
-        
         r_seg = p_b - p_a
-        v_seg = v_b - v_a
+        v_seg = vel[j+1] - vel[j]
         l_seg = np.linalg.norm(r_seg)
         l_seg_safe = max(l_seg, 1e-6)
         l_dot_seg = np.dot(r_seg, v_seg) / l_seg_safe
@@ -221,8 +212,6 @@ def compute_physics_metrics(t, X, p_arr):
     theta_gmst = (theta_g0 + omega_e * t) % (2 * np.pi)
     cos_tg = np.cos(theta_gmst)
     sin_tg = np.sin(theta_gmst)
-    
-    from environment import get_environment_optimized
 
     cd = p_arr[p.IDX_CD]
     area_sc = p_arr[p.IDX_AREA]
@@ -262,7 +251,7 @@ def compute_physics_metrics(t, X, p_arr):
     i_dynamic = v_total_emf / p_arr[p.IDX_R_TOTAL]
     
     for j in range(n_edt + 1):
-        p_a = pos[j]; p_b = pos[j+1]
+        p_a, p_b = pos[j], pos[j+1]
         r_seg = p_b - p_a
         b_vec, _ = get_environment_optimized((p_a + p_b)/2.0, (vel[j] + vel[j+1])/2.0, t, p_arr, cos_tg, sin_tg)
         total_lorentz_force += i_dynamic * np.cross(r_seg, b_vec)

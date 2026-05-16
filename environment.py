@@ -1,6 +1,7 @@
 import numpy as np
 from numba import njit
 import params as p
+from frames import get_earth_rotation_components, eci_to_ecef, ecef_to_eci
 
 @njit(fastmath=True)
 def get_environment_fast(r_eci, v, t, p_arr):
@@ -11,40 +12,17 @@ def get_environment_fast(r_eci, v, t, p_arr):
     r_norm = np.linalg.norm(r_eci)
     
     # --- A. FRAME TRANSFORMATION (ECI to ECEF) ---
-    omega_e = 7.2921151467e-5  # Earth's rotation rate [rad/s]
-    
-    # Arbitrary starting angle for the Earth at t=0
-    # You can change this if you want to test starting over different longitudes
-    theta_g0 = 0.0 
-    
-    # Earth rotation angle based purely on your simulation time
-    theta_gmst = (theta_g0 + omega_e * t) % (2 * np.pi)
-    
-    cos_tg = np.cos(theta_gmst)
-    sin_tg = np.sin(theta_gmst)
-    
-    # Rotate r_eci to r_ecef (Z-axis rotation)
-    r_ecef = np.array([
-        cos_tg * r_eci[0] + sin_tg * r_eci[1],
-        -sin_tg * r_eci[0] + cos_tg * r_eci[1],
-        r_eci[2]
-    ])
+    cos_tg, sin_tg = get_earth_rotation_components(t)
+    r_ecef = eci_to_ecef(r_eci, cos_tg, sin_tg)
     
     # --- B. COMPUTE MAGNETIC FIELD ---
     g, h = get_igrf2000_coeffs()
     B_ecef = compute_igrf_ecef(r_ecef, g, h)
     
     # --- C. FRAME TRANSFORMATION (ECEF back to ECI) ---
-    # Rotate B_ecef back to inertial frame so EDT cross products work
-    B_eci = np.array([
-        cos_tg * B_ecef[0] - sin_tg * B_ecef[1],
-        sin_tg * B_ecef[0] + cos_tg * B_ecef[1],
-        B_ecef[2]
-    ])
+    B_eci = ecef_to_eci(B_ecef, cos_tg, sin_tg)
     
     # --- D. ATMOSPHERIC DENSITY (rho) ---
-    # Scientific Model: Multi-layer Exponential + Diurnal Bulge
-    # This accounts for both altitude-dependent scale height and day/night variations.
     h_km = (r_norm - p_arr[p.IDX_RE]) / 1000.0
     rho_base = get_density_standard(h_km)
     
@@ -148,22 +126,14 @@ def get_environment_optimized(r_eci, v, t, p_arr, cos_tg, sin_tg):
     r_norm = np.linalg.norm(r_eci)
     
     # --- A. FRAME TRANSFORMATION (ECI to ECEF) ---
-    r_ecef = np.array([
-        cos_tg * r_eci[0] + sin_tg * r_eci[1],
-        -sin_tg * r_eci[0] + cos_tg * r_eci[1],
-        r_eci[2]
-    ])
+    r_ecef = eci_to_ecef(r_eci, cos_tg, sin_tg)
     
     # --- B. COMPUTE MAGNETIC FIELD ---
     # Coefficients are effectively cached by Numba if we don't re-create them poorly
     B_ecef = compute_igrf_ecef_fast(r_ecef)
     
     # --- C. FRAME TRANSFORMATION (ECEF back to ECI) ---
-    B_eci = np.array([
-        cos_tg * B_ecef[0] - sin_tg * B_ecef[1],
-        sin_tg * B_ecef[0] + cos_tg * B_ecef[1],
-        B_ecef[2]
-    ])
+    B_eci = ecef_to_eci(B_ecef, cos_tg, sin_tg)
     
     # --- D. ATMOSPHERIC DENSITY (rho) ---
     h_km = (r_norm - p_arr[p.IDX_RE]) / 1000.0

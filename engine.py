@@ -1,8 +1,7 @@
 import numpy as np
 import os
-from tqdm import tqdm
-from scipy.integrate import solve_ivp
-from dynamics import tether_dynamics_fast, tether_jacobian_fast
+from frames import get_rotation_matrix_eci
+from integrators import rk45_dopri_integrate, lsoda_integrate, IntegratorSolution
 import hashlib
 
 def setup_initial_state(params):
@@ -68,16 +67,10 @@ def setup_initial_state(params):
         pos_orb[i] = np.array([r_node, -l_rope, 0.0])
         vel_orb[i] = np.array([omega * l_rope, omega * r_node, 0.0])
         
-    # 3. Rotate from Orbital Plane to ECI based on Inclination
-    # We assume the initial position is at the Ascending Node (RAAN=0, arg_per=0)
-    # Rotation matrix around X-axis (Line of Nodes)
-    cos_i = np.cos(inc)
-    sin_i = np.sin(inc)
-    R_inc = np.array([
-        [1.0, 0.0, 0.0],
-        [0.0, cos_i, -sin_i],
-        [0.0, sin_i, cos_i]
-    ])
+    # 3. Rotate from Orbital Plane to ECI
+    # Standard transformation using modular Rx(inc) from frames.py.
+    # This ensures a prograde orbit (h_z > 0) moving Northward at t=0.
+    R_inc = get_rotation_matrix_eci(inc)
     
     pos = np.dot(pos_orb, R_inc.T)
     vel = np.dot(vel_orb, R_inc.T)
@@ -122,41 +115,48 @@ def load_checkpoint(run_folder):
         return float(data['t']), data['X'], data['p_arr'], p_hash, h_t, h_X, total_compute_time
     return None, None, None, None, None, None, 0.0
 
-def integrate_system(X0, t_span, p_arr, desc, rtol=1e-7, atol=1e-9, pbar=None, sampling_hz=1.0, method='RK45'):
+def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
+                     sampling_hz=1.0, method='RK45', progress_chunk_s=100.0):
     """
-    Driver for the ODE solver with real-time progress feedback.
-    Performance: Uses t_eval to downsample output, preventing memory bloat from micro-steps.
+    Pure integration driver. Dispatches to compiled integrators in `integrators.py`
+    (Numba RK45 / numbalsoda LSODA), keeping the integration loop free of Python
+    crossings. If `pbar` is provided, ticks it once per chunk of `progress_chunk_s`
+    simulated seconds; otherwise runs silently. Bar ownership is the caller's job.
     """
-    local_pbar = [None]
     t0, tf = t_span
-    last_t_rounded = [int(t0)]
+    span = tf - t0
+    method_u = method.upper()
 
-    # Downsampling: Ensure we only save state at the requested frequency.
-    # 1.0 Hz is scientific standard for long LEO mission telemetry.
-    t_eval = np.linspace(t0, tf, int((tf - t0) * sampling_hz) + 1)
+    # Output grid (e.g. 1 Hz telemetry). +1 so endpoint is included.
+    n_total = int(span * sampling_hz) + 1
+    t_eval = np.linspace(t0, tf, n_total)
 
-    def wrapped_dynamics(t, y):
-        # Use provided pbar or create a local one for this segment
-        pb = pbar if pbar is not None else local_pbar[0]
+    n_state = X0.shape[0]
+    Y_out = np.empty((n_total, n_state))
+    Y_out[0] = X0
 
-        if pb is None and pbar is None:
-            local_pbar[0] = tqdm(total=int(tf - t0), unit=' seconds', desc=desc)
-            pb = local_pbar[0]
+    chunk_pts = max(2, int(progress_chunk_s * sampling_hz))
 
-        t_now_rounded = int(t)
-        if t_now_rounded > last_t_rounded[0]:
-            if pb is not None:
-                pb.update(t_now_rounded - last_t_rounded[0])
-            last_t_rounded[0] = t_now_rounded
-        return tether_dynamics_fast(t, y, p_arr)
+    y = X0.astype(np.float64).copy()
+    i = 0
+    while i < n_total - 1:
+        j = min(i + chunk_pts, n_total - 1)
+        te = t_eval[i:j+1]  # both endpoints, len >= 2
 
-    # method='LSODA' handles stiff aluminum EDT dynamics efficiently
-    # Providing the jitted Jacobian (jac) significantly speeds up convergence.
-    sol = solve_ivp(wrapped_dynamics, (t0, tf), X0, method=method, 
-                    jac=lambda t, y: tether_jacobian_fast(t, y, p_arr),
-                    t_eval=t_eval, rtol=rtol, atol=atol)
+        if method_u == 'RK45':
+            Y_chunk = rk45_dopri_integrate(te[0], te[-1], y, p_arr, te, rtol, atol)
+        elif method_u == 'LSODA':
+            Y_chunk = lsoda_integrate(te[0], te[-1], y, p_arr, te, rtol, atol)
+        else:
+            raise ValueError(f"Unknown method '{method}'. Use 'RK45' or 'LSODA'.")
 
-    if local_pbar[0] is not None:
-        local_pbar[0].close()
-    return sol
+        Y_out[i:j+1] = Y_chunk
+        y = Y_chunk[-1].copy()
 
+        if pbar is not None:
+            dt_chunk = int(te[-1]) - int(te[0])
+            if dt_chunk > 0:
+                pbar.update(dt_chunk)
+        i = j
+
+    return IntegratorSolution(t=t_eval, y=Y_out.T)

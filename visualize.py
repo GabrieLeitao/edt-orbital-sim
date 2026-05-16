@@ -2,8 +2,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
+from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d import Axes3D
 import os
+import signal
 from frames import eci_to_lvlh
 import yaml
 from params import SimulationParams
@@ -161,32 +163,28 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
 
     # Orbit Elements
     skip = max(1, frames // 500)
-    ax_orbit.plot(data_pos[::skip, target_idx, 0], data_pos[::skip, target_idx, 1], data_pos[::skip, target_idx, 2], 'k--', alpha=0.3, label="Orbit Path")
+    orbit_path_data = data_pos[::skip, target_idx, :].astype(float).copy()
+    orbit_path, = ax_orbit.plot(orbit_path_data[:, 0], orbit_path_data[:, 1], orbit_path_data[:, 2], 'k--', alpha=0.3, label="Orbit Path")
     trace_orbit, = ax_orbit.plot([], [], [], 'r-', lw=1.5, alpha=0.6, label="Trace")
     point_orbit, = ax_orbit.plot([], [], [], 'ro', markersize=6, label="Current Pos")
-    
-    # Earth Visualization
+
+    def occluded_mask(points):
+        """Points hidden behind Earth from the current ax_orbit camera (orthographic approx)."""
+        elev = np.radians(ax_orbit.elev)
+        azim = np.radians(ax_orbit.azim)
+        cam = np.array([np.cos(azim)*np.cos(elev), np.sin(azim)*np.cos(elev), np.sin(elev)])
+        proj = points @ cam
+        perp2 = np.sum(points**2, axis=1) - proj**2
+        return (proj < 0) & (perp2 < re*re)
+
+    # Earth Visualization (solid surface for proper occlusion cue)
     u, v = np.mgrid[0:2*np.pi:30j, 0:np.pi:15j]
-    ax_orbit.plot_wireframe(re*np.cos(u)*np.sin(v), re*np.sin(u)*np.sin(v), re*np.cos(v), color="blue", alpha=0.05)
+    ax_orbit.plot_surface(re*np.cos(u)*np.sin(v), re*np.sin(u)*np.sin(v), re*np.cos(v), color="steelblue", alpha=0.35, linewidth=0, antialiased=False, shade=True)
     
     # Equator Line (Reference)
-    theta = np.linspace(0, 2*np.pi, 100)
+    theta = np.linspace(0, 2*np.pi, 200)
     ax_orbit.plot(re*np.cos(theta), re*np.sin(theta), 0, color="blue", lw=1, alpha=0.2, label="Equator")
-    
-    # Nominal Orbital Plane
-    # Create circle in XY, then rotate by inclination around X-axis
-    r_orbit_nominal = re + params.alt
-    orbit_plane_x = r_orbit_nominal * np.cos(theta)
-    orbit_plane_y_raw = r_orbit_nominal * np.sin(theta)
-    
-    # Rotation by inc around X
-    cos_i = np.cos(params.inc)
-    sin_i = np.sin(params.inc)
-    orbit_plane_y = orbit_plane_y_raw * cos_i
-    orbit_plane_z = orbit_plane_y_raw * sin_i
-    
-    ax_orbit.plot(orbit_plane_x, orbit_plane_y, orbit_plane_z, color="red", lw=2, alpha=0.3, ls=':', label="Nominal Plane")
-    
+
     # ECI Reference Frame Axes
     ax_orbit.set_xlabel("X (ECI) [m]")
     ax_orbit.set_ylabel("Y (ECI) [m]")
@@ -221,6 +219,23 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
     ax_button = plt.axes([0.05, 0.02, 0.1, 0.03])
     btn_play = Button(ax_button, 'Play/Pause')
 
+    ax_view_btn = plt.axes([0.16, 0.02, 0.08, 0.03])
+    btn_view = Button(ax_view_btn, 'Top-Down')
+    is_top_down = [False]
+
+    def toggle_view(_):
+        is_top_down[0] = not is_top_down[0]
+        if is_top_down[0]:
+            ax_orbit.view_init(elev=89, azim=-90)
+            btn_view.label.set_text('Iso')
+        else:
+            ax_orbit.view_init(elev=20, azim=45)
+            btn_view.label.set_text('Top-Down')
+        update_view(slider.val)
+        fig.canvas.draw_idle()
+
+    btn_view.on_clicked(toggle_view)
+
     # 5. Interactive Logic
     def update_view(frame_idx):
         frame_idx = int(frame_idx)
@@ -230,13 +245,21 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         r_target = r_curr[target_idx]
         v_target = v_curr[target_idx]
         
-        # 1. Full Orbit (ECI)
+        # 1. Full Orbit (ECI) — hide segments occluded by Earth
+        point_orbit.set_visible(not occluded_mask(r_target[np.newaxis, :])[0])
         point_orbit.set_data([r_target[0]], [r_target[1]])
         point_orbit.set_3d_properties([r_target[2]])
+
         trace_skip = max(1, frame_idx // 100)
-        trace_data = data_pos[:frame_idx+1:trace_skip, target_idx, :]
+        trace_data = data_pos[:frame_idx+1:trace_skip, target_idx, :].astype(float).copy()
+        trace_data[occluded_mask(trace_data)] = np.nan
         trace_orbit.set_data(trace_data[:, 0], trace_data[:, 1])
         trace_orbit.set_3d_properties(trace_data[:, 2])
+
+        op_plot = orbit_path_data.copy()
+        op_plot[occluded_mask(op_plot)] = np.nan
+        orbit_path.set_data(op_plot[:, 0], op_plot[:, 1])
+        orbit_path.set_3d_properties(op_plot[:, 2])
         
         limit = 8e6 
         ax_orbit.set_xlim3d([-limit, limit])
@@ -288,15 +311,19 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
     slider.on_changed(update_view)
     btn_play.on_clicked(lambda e: is_playing.__setitem__(0, not is_playing[0]))
 
-    def animate_step():
+    def animate_step(_frame):
         if is_playing[0]:
             next_val = (slider.val + speed_factor) % frames
             slider.set_val(next_val)
-        plt.pause(0.01)
 
     update_view(0)
-    while plt.fignum_exists(fig.number):
-        animate_step()
+    # FuncAnimation drives playback through matplotlib's event loop. Restore the
+    # OS-default SIGINT handler so Ctrl+C kills the process immediately —
+    # matplotlib's Tk/Qt backend would otherwise swallow it inside C code.
+    # Keep a reference to anim so it isn't garbage-collected mid-show.
+    anim = FuncAnimation(fig, animate_step, interval=10, cache_frame_data=False)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    plt.show()
 
 if __name__ == "__main__":
     interactive_visualization()

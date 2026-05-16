@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import os
 import numpy as np
+from tqdm import tqdm
 
 from params import SimulationParams
 from engine import setup_initial_state, integrate_system
@@ -43,7 +44,9 @@ def run_validation():
     print(f"\n--- Starting Validation ---\nMethod: {method}\nTotal Duration: {t_end/3600:.2f} hours\n")
     
     # 2. Propagate
-    sol = integrate_system(X0, (0, t_end), p_arr, "Validating Physics", rtol=1e-7, atol=1e-9, sampling_hz=1.0, method=method)
+    with tqdm(total=int(t_end), unit='s', desc="Validating Physics") as pbar:
+        sol = integrate_system(X0, (0, t_end), p_arr, rtol=1e-7, atol=1e-9,
+                               pbar=pbar, sampling_hz=1.0, method=method)
     
     run_folder = get_results_folder("validation")
 
