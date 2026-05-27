@@ -23,13 +23,12 @@ def calculate_total_energy_fast(p_frame, v_frame, masses, p_arr):
     n_edt = int(p_arr[p.IDX_N_EDT])
     
     # Derived EDT Stiffness
-    area_edt = np.pi * (p_arr[p.IDX_DIAM_EDT] / 2.0)**2
-    l_edt_seg = p_arr[p.IDX_L_EDT] / (n_edt + 1)
+    area_edt = p_arr[p.IDX_AREA_EDT]
+    l_edt_seg = p_arr[p.IDX_L_EDT] / n_edt
     k_edt = (p_arr[p.IDX_E_EDT] * area_edt) / l_edt_seg
     
     # Derived Rope Stiffness
-    area_rope = np.pi * (p_arr[p.IDX_DIAM_ROPE] / 2.0)**2
-    k_rope = (p_arr[p.IDX_E_ROPE] * area_rope) / p_arr[p.IDX_L_ROPE]
+    k_rope = p_arr[p.IDX_K_ROPE]
     l_rope_nom = p_arr[p.IDX_L_ROPE]
     
     e_total = 0.0
@@ -38,12 +37,12 @@ def calculate_total_energy_fast(p_frame, v_frame, masses, p_arr):
         v_mag2 = np.sum(v_frame[j]**2)
         e_total += 0.5 * masses[j] * v_mag2 - (mu * masses[j] / r_mag)
         
-    for j in range(n_edt + 1):
+    for j in range(n_edt):
         dr = np.linalg.norm(p_frame[j+1] - p_frame[j])
         if dr > l_edt_seg:
             e_total += 0.5 * k_edt * (dr - l_edt_seg)**2
             
-    dr_rope = np.linalg.norm(p_frame[n_edt+2] - p_frame[n_edt+1])
+    dr_rope = np.linalg.norm(p_frame[n_edt+1] - p_frame[n_edt])
     if dr_rope > l_rope_nom:
         e_total += 0.5 * k_rope * (dr_rope - l_rope_nom)**2
     return e_total
@@ -107,8 +106,8 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params):
     
     sma = calculate_com_sma(t_vals, X_vals, p_arr, params)
 
-    idx_sc = params.N_edt + 1
-    idx_target = params.N_edt + 2
+    idx_sc = params.N_edt
+    idx_target = params.N_edt + 1
 
     for i in range(count):
         p_frame = X_vals[i, :3*num_masses].reshape((num_masses, 3))

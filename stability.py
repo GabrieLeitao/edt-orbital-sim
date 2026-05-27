@@ -21,8 +21,8 @@ def check_state_sanity(X, params):
         if alt < 100e3:
             return False, f"Mass {i} re-entered atmosphere (alt={alt/1e3:.1f} km)"
         
-    l_seg_nom = params.L_edt / (params.N_edt + 1)
-    for i in range(params.N_edt + 1):
+    l_seg_nom = params.L_edt / params.N_edt
+    for i in range(params.N_edt):
         l_seg = np.linalg.norm(pos[i+1] - pos[i])
         if l_seg > l_seg_nom * 1.5:
             return False, f"EDT segment {i} stretched beyond limit ({l_seg:.1f}m > {l_seg_nom*1.5:.1f}m)"
@@ -35,8 +35,8 @@ def get_stiffness_report(params):
     Analyzes system stiffness to warn about potential numerical issues.
     """
     # EDT Segment Stiffness
-    l_seg = params.L_edt / (params.N_edt + 1)
-    m_seg = params.m_edt_total / (params.N_edt + 1)
+    l_seg = params.L_edt / params.N_edt
+    m_seg = params.m_edt_total / params.N_edt
     area_edt = np.pi * (params.diam_edt / 2.0)**2
     k_seg = (params.E_edt * area_edt) / l_seg
     w_seg = np.sqrt(k_seg / m_seg)
@@ -62,7 +62,7 @@ def analyze_stress_evolution(t_vals, X_vals, params, breaking_tension):
     Analyzes peak tension and checks for oscillation growth (instability).
     """
     num_masses = params.num_masses
-    l0_seg = params.L_edt / (params.N_edt + 1)
+    l0_seg = params.L_edt / params.N_edt
     area_edt = np.pi * (params.diam_edt / 2.0)**2
     k_seg = (params.E_edt * area_edt) / l0_seg
     beta = params.beta_edt
@@ -78,7 +78,7 @@ def analyze_stress_evolution(t_vals, X_vals, params, breaking_tension):
             pos = X_vals[i, :3*num_masses].reshape((num_masses, 3))
             vel = X_vals[i, 3*num_masses:].reshape((num_masses, 3))
             
-            for j in range(params.N_edt + 1):
+            for j in range(params.N_edt):
                 r_seg = pos[j+1] - pos[j]
                 v_seg = vel[j+1] - vel[j]
                 l_seg = np.linalg.norm(r_seg)
@@ -98,7 +98,7 @@ def analyze_stress_evolution(t_vals, X_vals, params, breaking_tension):
     return overall_max_tension, sf, is_growing
 
 
-def run_preflight_stability_check(X0, p_arr, params, duration=300.0):
+def run_preflight_stability_check(X0, p_arr, params, method, duration=300.0):
     """
     Runs a 300s WORST-CASE Stress Test to catch environmental instabilities.
     """
@@ -131,7 +131,7 @@ def run_preflight_stability_check(X0, p_arr, params, duration=300.0):
     try:
         with tqdm(total=int(duration), unit='s', desc="Worst-Case Test") as pbar:
             sol = integrate_system(X_stressed, (0, duration), p_stressed,
-                                   pbar=pbar, sampling_hz=20.0)
+                                   pbar=pbar, sampling_hz=20.0, method=method)
     except Exception as e:
         return False, f"Solver crashed during stress test: {e}"
     
