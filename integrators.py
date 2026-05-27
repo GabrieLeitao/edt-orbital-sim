@@ -5,6 +5,7 @@ the scipy.solve_ivp profile.
 
 Two methods provided:
 - 'RK45': adaptive Dormand-Prince 5(4) implemented in pure @njit
+- 'VERLET': fixed-step Velocity Verlet (symplectic) implemented in pure @njit
 - 'LSODA': numbalsoda's LSODA (compiled C) called via a cfunc RHS wrapper
 """
 import numpy as np
@@ -20,7 +21,7 @@ from dynamics import tether_dynamics_fast
 
 # Length of the flat parameter array from SimulationParams.to_numba_params().
 # Used to size the carray view inside the cfunc RHS.
-P_ARR_LEN = 26
+P_ARR_LEN = 27
 
 
 # ---------------------------------------------------------------------------
@@ -59,10 +60,22 @@ def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol):
     for i in range(n):
         y[i] = y0[i]
 
-    # Initial step: 1% of span (conservative)
-    span = tf - t0
-    h = 0.01 * span
-    h_max = 0.5 * span
+    # Physically grounded step size (CFL condition)
+    # Speed of sound c_s = sqrt(E / rho)
+    # dt_wave = dl / c_s
+    l_edt = p_arr[p.IDX_L_EDT]
+    n_edt = p_arr[p.IDX_N_EDT]
+    e_edt = p_arr[p.IDX_E_EDT]
+    rho_al = p_arr[p.IDX_RHO_AL]
+    
+    dl = l_edt / n_edt
+    c_s = np.sqrt(e_edt / rho_al)
+    dt_wave = dl / c_s
+    
+    # Step limits: h_max must resolve wave propagation across one element
+    # Use 0.5 * dt_wave as h_max to ensure Nyquist-like sampling of longitudinal waves
+    h = 0.1 * dt_wave
+    h_max = 0.5 * dt_wave
     h_min = 1e-9
 
     # Bootstrap k1
@@ -172,6 +185,88 @@ def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol):
     return Y
 
 
+@njit(fastmath=True, cache=True)
+def velocity_verlet_integrate(t0, tf, y0, p_arr, t_eval):
+    """
+    Fixed-step Velocity Verlet integrator.
+    Symplectic (2nd order) for conservative forces.
+    
+    Handles velocity-dependent forces (damping, drag, Lorentz) via a 
+    predictor-corrector approach for the second velocity update.
+    """
+    n_state = y0.shape[0]
+    m_eval = t_eval.shape[0]
+    n_masses = n_state // 6
+    n_dof = 3 * n_masses
+    
+    Y = np.empty((m_eval, n_state))
+    Y[0] = y0
+    
+    # CFL-based fixed step
+    l_edt = p_arr[p.IDX_L_EDT]
+    n_edt = p_arr[p.IDX_N_EDT]
+    e_edt = p_arr[p.IDX_E_EDT]
+    rho_al = p_arr[p.IDX_RHO_AL]
+    
+    dl = l_edt / n_edt
+    c_s = np.sqrt(e_edt / rho_al)
+    dt_wave = dl / c_s
+    
+    # Fixed dt: 0.1 * dt_wave is safe for explicit stability
+    dt = 0.1 * dt_wave
+    
+    t = t0
+    y = y0.copy()
+    
+    # Initial Acceleration
+    dx_init = tether_dynamics_fast(t, y, p_arr)
+    a_n = dx_init[n_dof:].copy()
+    
+    eval_idx = 1
+    while t < tf:
+        if t + dt > tf:
+            dt_step = tf - t
+        else:
+            dt_step = dt
+            
+        # 1. Half-step velocity
+        # v_half = v_n + 0.5 * a_n * dt
+        v_n = y[n_dof:]
+        v_half = v_n + 0.5 * a_n * dt_step
+        
+        # 2. Full-step position
+        # x_next = x_n + v_half * dt
+        x_n = y[:n_dof]
+        x_next = x_n + v_half * dt_step
+        
+        # 3. Predictor step for acceleration (a_next depends on x_next, v_half)
+        t_next = t + dt_step
+        y_pred = np.empty(n_state)
+        y_pred[:n_dof] = x_next
+        y_pred[n_dof:] = v_half
+        
+        dx_next = tether_dynamics_fast(t_next, y_pred, p_arr)
+        a_next = dx_next[n_dof:]
+        
+        # 4. Final velocity update
+        # v_next = v_half + 0.5 * a_next * dt
+        v_next = v_half + 0.5 * a_next * dt_step
+        
+        # Update state
+        y[:n_dof] = x_next
+        y[n_dof:] = v_next
+        a_n = a_next # Reuse for next step
+        t = t_next
+        
+        # Dense output at t_eval points
+        while eval_idx < m_eval and t_eval[eval_idx] <= t + 1e-12:
+            # Nearest neighbor for fixed-step output
+            Y[eval_idx] = y
+            eval_idx += 1
+            
+    return Y
+
+
 # ---------------------------------------------------------------------------
 # LSODA via numbalsoda
 # ---------------------------------------------------------------------------
@@ -193,7 +288,7 @@ def _get_lsoda():
     def _rhs_lsoda(t, y_ptr, dy_ptr, p_ptr):
         p_arr = nb.carray(p_ptr, (P_ARR_LEN,))
         n_edt = int(p_arr[p.IDX_N_EDT])
-        neq = 6 * (3 + n_edt)
+        neq = 6 * (2 + n_edt)
         y = nb.carray(y_ptr, (neq,))
         dy = nb.carray(dy_ptr, (neq,))
         dx = tether_dynamics_fast(t, y, p_arr)

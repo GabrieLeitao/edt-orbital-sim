@@ -6,16 +6,28 @@ from frames import get_earth_rotation_components
 
 @njit(fastmath=True)
 def get_mass_fast(idx, p_arr, num_masses):
-    """Numba-compatible mass lookup"""
+    """
+    Numba-compatible mass lookup with lumped-mass distribution.
+    
+    Mass Distribution:
+    - Node 0 (Tip): m_tip + 0.5 * m_seg_edt
+    - Node 1 to N_edt-1 (Beads): m_seg_edt
+    - Node N_edt (Spacecraft): m_sc + 0.5 * m_seg_edt
+    - Node N_edt+1 (Target): m_target
+    """
     n_edt = int(p_arr[p.IDX_N_EDT])
+    m_edt_seg = p_arr[p.IDX_M_EDT_TOTAL] / n_edt
+    
     if idx == 0:
-        return p_arr[p.IDX_M_TIP]
+        return p_arr[p.IDX_M_TIP] + 0.5 * m_edt_seg
+    elif idx < n_edt:
+        return m_edt_seg
+    elif idx == n_edt:
+        return p_arr[p.IDX_M_SC] + 0.5 * m_edt_seg
     elif idx == n_edt + 1:
-        return p_arr[p.IDX_M_SC]
-    elif idx == n_edt + 2:
         return p_arr[p.IDX_M_TARGET]
     else:
-        return p_arr[p.IDX_M_EDT_TOTAL] / n_edt
+        return 0.0
 
 @njit(fastmath=True)
 def smooth_tension(dl, dl_dot, k, beta):
@@ -61,7 +73,7 @@ def tether_dynamics_fast(t, X, p_arr):
     p_arr: Flat parameter array
     """
     n_edt = int(p_arr[p.IDX_N_EDT])
-    num_masses = 3 + n_edt
+    num_masses = 2 + n_edt
     dX = np.zeros_like(X)
     
     # Extract positions and velocities
@@ -84,12 +96,12 @@ def tether_dynamics_fast(t, X, p_arr):
     re = p_arr[p.IDX_RE]
     j2 = p_arr[p.IDX_J2]
     cd = p_arr[p.IDX_CD]
-    area = p_arr[p.IDX_AREA]
+    area_sc = p_arr[p.IDX_AREA_SC]
     area_edt = p_arr[p.IDX_AREA_EDT]
     diam_edt = p_arr[p.IDX_DIAM_EDT]
     diam_rope = p_arr[p.IDX_DIAM_ROPE]
     l_rope = p_arr[p.IDX_L_ROPE]
-    l0_edt_seg = p_arr[p.IDX_L_EDT] / (n_edt + 1)
+    l0_edt_seg = p_arr[p.IDX_L_EDT] / n_edt
     
     for i in range(num_masses):
         r = pos[i]
@@ -109,8 +121,6 @@ def tether_dynamics_fast(t, X, p_arr):
         accel[i, 2] = a_g[2] + pref * r[2] * (5 * z2 / r2 - 3)
 
         # Atmospheric Drag (All nodes)
-        # Optimized: only need rho for drag, but B is used for Lorentz later.
-        # However, for simplicity and to match the physics, we get both.
         _, rho = get_environment_optimized(r, v, t, p_arr, cos_tg, sin_tg)
         
         # Relative wind
@@ -120,12 +130,12 @@ def tether_dynamics_fast(t, X, p_arr):
         # Calculate node-specific area
         if i == 0: # Tip
             node_area = p_arr[p.IDX_AREA_TIP] + 0.5 * l0_edt_seg * diam_edt
-        elif i <= n_edt: # Beads
+        elif i < n_edt: # Beads
             node_area = l0_edt_seg * diam_edt
-        elif i == n_edt + 1: # SC
-            node_area = area + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
+        elif i == n_edt: # SC
+            node_area = area_sc + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
         else: # Target
-            node_area = area + 0.5 * l_rope * diam_rope
+            node_area = area_sc + 0.5 * l_rope * diam_rope
 
         if v_rel_norm > 1e-3:
             f_drag = -0.5 * rho * cd * node_area * v_rel_norm * v_rel
@@ -137,8 +147,8 @@ def tether_dynamics_fast(t, X, p_arr):
     
     # PASS 1: Calculate Motional EMF and store B-fields for segments
     v_total_emf = 0.0
-    b_fields = np.zeros((n_edt + 1, 3))
-    for j in range(n_edt + 1):
+    b_fields = np.zeros((n_edt, 3))
+    for j in range(n_edt):
         p_a = pos[j]; p_b = pos[j+1]
         r_seg = p_b - p_a
         v_mid = (vel[j] + vel[j+1]) / 2.0
@@ -150,7 +160,7 @@ def tether_dynamics_fast(t, X, p_arr):
     i_dynamic = v_total_emf / p_arr[p.IDX_R_TOTAL]
     
     # PASS 2: Apply Tension and Lorentz Forces
-    for j in range(n_edt + 1):
+    for j in range(n_edt):
         p_a = pos[j]; p_b = pos[j+1]
         r_seg = p_b - p_a
         v_seg = vel[j+1] - vel[j]
@@ -172,20 +182,20 @@ def tether_dynamics_fast(t, X, p_arr):
         accel[j] += 0.5 * f_l / m_a
         accel[j+1] += 0.5 * f_l / m_b
 
-    # Rope Link: SC (N+1) to Target (N+2)
-    idx_sc = n_edt + 1
-    idx_target = n_edt + 2
-    r_rope = pos[idx_target] - pos[idx_sc]
-    v_rope = vel[idx_target] - vel[idx_sc]
-    l_r = np.linalg.norm(r_rope)
+    # Rope Link: SC (N) to Target (N+1)
+    idx_sc = n_edt
+    idx_target = n_edt + 1
+    r_rope_vec = pos[idx_target] - pos[idx_sc]
+    v_rope_vec = vel[idx_target] - vel[idx_sc]
+    l_r = np.linalg.norm(r_rope_vec)
     l_r_safe = max(l_r, 1e-6)
-    l_dot_r = np.dot(r_rope, v_rope) / l_r_safe
+    l_dot_r = np.dot(r_rope_vec, v_rope_vec) / l_r_safe
     
     t_r = smooth_tension(l_r - p_arr[p.IDX_L_ROPE], l_dot_r, p_arr[p.IDX_K_ROPE], p_arr[p.IDX_BETA_ROPE])
-    f_t_r = (t_r / l_r_safe) * r_rope
+    f_t_r = (t_r / l_r_safe) * r_rope_vec
     
-    accel[idx_sc] += f_t_r / p_arr[p.IDX_M_SC]
-    accel[idx_target] -= f_t_r / p_arr[p.IDX_M_TARGET]
+    accel[idx_sc] += f_t_r / get_mass_fast(idx_sc, p_arr, num_masses)
+    accel[idx_target] -= f_t_r / get_mass_fast(idx_target, p_arr, num_masses)
 
     # Assemble dX
     dX[:3*num_masses] = vel.flatten()
@@ -199,7 +209,7 @@ def compute_physics_metrics(t, X, p_arr):
     Optimized physical metrics calculation.
     """
     n_edt = int(p_arr[p.IDX_N_EDT])
-    num_masses = 3 + n_edt
+    num_masses = 2 + n_edt
     
     X_pos_slice = np.ascontiguousarray(X[:3*num_masses])
     pos = X_pos_slice.reshape((num_masses, 3))
@@ -214,11 +224,11 @@ def compute_physics_metrics(t, X, p_arr):
     sin_tg = np.sin(theta_gmst)
 
     cd = p_arr[p.IDX_CD]
-    area_sc = p_arr[p.IDX_AREA]
+    area_sc = p_arr[p.IDX_AREA_SC]
     diam_edt = p_arr[p.IDX_DIAM_EDT]
     diam_rope = p_arr[p.IDX_DIAM_ROPE]
     l_rope = p_arr[p.IDX_L_ROPE]
-    l0_edt_seg = p_arr[p.IDX_L_EDT] / (n_edt + 1)
+    l0_edt_seg = p_arr[p.IDX_L_EDT] / n_edt
     
     # 1. Drag Calculation
     total_drag_force = np.zeros(3)
@@ -229,8 +239,8 @@ def compute_physics_metrics(t, X, p_arr):
         v_rel = v - np.cross(np.array([0.0, 0.0, omega_e]), r)
         v_rel_norm = np.linalg.norm(v_rel)
         
-        if i == n_edt + 2: node_area = area_sc + 0.5 * l_rope * diam_rope
-        elif i == n_edt + 1: node_area = area_sc + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
+        if i == n_edt + 1: node_area = area_sc + 0.5 * l_rope * diam_rope
+        elif i == n_edt: node_area = area_sc + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
         elif i == 0: node_area = p_arr[p.IDX_AREA_TIP] + 0.5 * l0_edt_seg * diam_edt
         else: node_area = diam_edt * l0_edt_seg
             
@@ -239,7 +249,7 @@ def compute_physics_metrics(t, X, p_arr):
     # 2. Current and Lorentz Calculation
     v_total_emf = 0.0
     total_lorentz_force = np.zeros(3)
-    for j in range(n_edt + 1):
+    for j in range(n_edt):
         p_a = pos[j]; p_b = pos[j+1]
         r_seg = p_b - p_a
         v_mid = (vel[j] + vel[j+1]) / 2.0
@@ -250,7 +260,7 @@ def compute_physics_metrics(t, X, p_arr):
         
     i_dynamic = v_total_emf / p_arr[p.IDX_R_TOTAL]
     
-    for j in range(n_edt + 1):
+    for j in range(n_edt):
         p_a, p_b = pos[j], pos[j+1]
         r_seg = p_b - p_a
         b_vec, _ = get_environment_optimized((p_a + p_b)/2.0, (vel[j] + vel[j+1])/2.0, t, p_arr, cos_tg, sin_tg)

@@ -27,9 +27,10 @@ class SimulationParams:
         self.beta_rope = 2.0 * 0.5 / w_rope
 
         # 4. EDT Properties (SC-Tip)
-        self.L_edt = 200.0            # Total EDT length [m]
-        self.N_edt = 3#10               # Number of segments
+        self.L_edt = 500.0            # Total EDT length [m]
+        self.N_edt = 6               # Number of segments
         self.E_edt = 70e9             # Young's Modulus (Aluminum) [Pa]
+
         self.diam_edt = 0.0015        # 1.5mm wire
         self.rho_aluminum = 2700.0    # Aluminum density [kg/m^3]
         
@@ -38,8 +39,8 @@ class SimulationParams:
         self.m_edt_total = self.L_edt * self.area_edt * self.rho_aluminum
         
         # Derived EDT Damping (Targeting zeta = 0.7 for critical damping of 'snaps')
-        l_seg = self.L_edt / (self.N_edt + 1)
-        m_seg = self.m_edt_total / (self.N_edt + 1)
+        l_seg = self.L_edt / self.N_edt
+        m_seg = self.m_edt_total / self.N_edt
         k_seg = (self.E_edt * self.area_edt) / l_seg
         w_seg = np.sqrt(k_seg / m_seg)
         self.beta_edt = 2.0 * 0.7 / w_seg
@@ -63,7 +64,7 @@ class SimulationParams:
 
     @property
     def num_masses(self):
-        return 3 + self.N_edt
+        return 2 + self.N_edt
 
     def to_dict(self):
         """Converts parameters to a structured dictionary for YAML export."""
@@ -196,7 +197,7 @@ class SimulationParams:
             self.L_edt, float(self.N_edt), self.m_edt_total,
             self.E_edt, self.diam_edt, self.area_edt, self.beta_edt,
             self.rho_al_res, self.z_plasma, self.r_load, self.r_wire, self.r_total, self.Cd, self.Area_sc,
-            self.area_tip
+            self.area_tip, self.rho_aluminum
         ], dtype=np.float64)
 
 # Indices for the flat array
@@ -218,11 +219,12 @@ IDX_E_EDT = 14
 IDX_DIAM_EDT = 15
 IDX_AREA_EDT = 16
 IDX_BETA_EDT = 17
-IDX_RHO_AL = 18
+IDX_RESISTIVITY_AL = 18
 IDX_Z_PLASMA = 19
 IDX_R_LOAD = 20
 IDX_R_WIRE = 21
 IDX_R_TOTAL = 22
 IDX_CD = 23
-IDX_AREA = 24
+IDX_AREA_SC = 24
 IDX_AREA_TIP = 25
+IDX_RHO_AL = 26

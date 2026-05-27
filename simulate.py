@@ -6,7 +6,6 @@ import questionary
 import hashlib
 import time
 import argparse
-import cProfile
 from tqdm import tqdm
 
 from params import SimulationParams
@@ -43,7 +42,7 @@ def plot_simulation(t_vals, sma_com, X_vals, params, run_folder):
     # 2. Tether Configuration
     plt.subplot(1, 2, 2)
     final_pos = X_vals[-1, :3*params.num_masses].reshape((params.num_masses, 3))
-    rel_pos = final_pos - final_pos[params.N_edt + 2]
+    rel_pos = final_pos - final_pos[params.N_edt + 1]
     plt.plot(rel_pos[:, 0], rel_pos[:, 1], '-ok')
     plt.gca().set_aspect('equal'); plt.grid(True)
     plt.title('Final Tether Configuration')
@@ -140,7 +139,6 @@ def initialize_new_mission():
     return run_folder, 0.0, X0, params, [], [], 0.0
 
 def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
-    """Main Orchestrator following KSRP principles."""
     # 1. Setup Phase
     rf, t_start, X0, params, all_t, all_X, comp_prev = handle_mission_resumption()
     if rf is None: # New run
@@ -150,13 +148,13 @@ def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
 
     # 2. Stability Guard Phase (Pre-flight)
     if t_start == 0.0 and not skip_test:
-        is_stable, msg = run_preflight_stability_check(X0, p_arr, params)
+        is_stable, msg = run_preflight_stability_check(X0, p_arr, params, method)
         if not is_stable:
             print(f"CRITICAL: Simulation aborted during pre-flight. {msg}")
             return
 
-    t_end = 5400 * 5 # Simulate for 10 orbits (~9 hours)
-    step_size = 500.0
+    t_end = 5400 * 4# Simulate for 10 orbits (~9 hours)
+    step_size = 1000.0
     t_curr, X_curr = t_start, X0
     session_start = time.time()
     print(f"\n--- Starting Simulation ---\nMethod: {method}\nTotal Duration: {t_end/3600:.2f} hours\nCheckpointing: {'Disabled' if skip_checkpoint else 'Enabled'}\nPre-flight Test: {'Skipped' if skip_test else 'Enabled'}\n")
@@ -217,8 +215,8 @@ def parse_arguments():
                         help="Skip periodic binary checkpoints and intermediate CSV saves for maximum performance.")
     parser.add_argument("--no-test", action="store_true",
                         help="Skip validation and pre test for numerical stability.")
-    parser.add_argument("--method", choices=['RK45', 'LSODA'], default='RK45',
-                        help="Integrator: Numba DP5(4) RK45 (default) or numbalsoda LSODA (stiff).")
+    parser.add_argument("--method", choices=['RK45', 'VERLET', 'LSODA', 'RADAU'], default='RK45',
+                        help="Integrator: Numba DP5(4) RK45 (default), Velocity Verlet, or numbalsoda LSODA.")
     return parser.parse_args()
 
 if __name__ == "__main__":

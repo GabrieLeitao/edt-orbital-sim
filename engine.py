@@ -1,8 +1,10 @@
 import numpy as np
 import os
-from frames import get_rotation_matrix_eci
-from integrators import rk45_dopri_integrate, lsoda_integrate, IntegratorSolution
 import hashlib
+from frames import get_rotation_matrix_eci
+from integrators import rk45_dopri_integrate, velocity_verlet_integrate, lsoda_integrate, IntegratorSolution
+from dynamics import tether_dynamics_fast
+from scipy.integrate import solve_ivp
 
 def setup_initial_state(params):
     """
@@ -19,9 +21,9 @@ def setup_initial_state(params):
     
     Indices (Radial-Inward):
     - Index 0: Tip Mass
-    - Index 1 to N_edt: EDT flexible beads
-    - Index N_edt + 1: Spacecraft (SC)
-    - Index N_edt + 2: Target Satellite
+    - Index 1 to N_edt-1: EDT flexible beads
+    - Index N_edt: Spacecraft (SC)
+    - Index N_edt + 1: Target Satellite
     """
     # 1. Basic Orbital Parameters
     a = params.R_e + params.alt
@@ -43,13 +45,13 @@ def setup_initial_state(params):
     pos_orb = np.zeros((num_masses, 3))
     vel_orb = np.zeros((num_masses, 3))
     
-    # Target (Index N_edt + 2) at [r_p, 0, 0]
-    idx_target = params.N_edt + 2
+    # Target (Index N_edt + 1) at [r_p, 0, 0]
+    idx_target = params.N_edt + 1
     pos_orb[idx_target] = np.array([r_p, 0.0, 0.0])
     vel_orb[idx_target] = np.array([0.0, v_p, 0.0])
     
-    # Spacecraft (Index N_edt + 1) at [r_p, -L_rope, 0]
-    idx_sc = params.N_edt + 1
+    # Spacecraft (Index N_edt) at [r_p, -L_rope, 0]
+    idx_sc = params.N_edt
     pos_orb[idx_sc] = np.array([r_p, -l_rope, 0.0])
     # Velocity includes the 'swing' term for the in-track separation
     vel_orb[idx_sc] = np.array([omega * l_rope, v_p, 0.0])
@@ -58,11 +60,11 @@ def setup_initial_state(params):
     pos_orb[0] = np.array([r_p - l_edt, -l_rope, 0.0])
     vel_orb[0] = np.array([omega * l_rope, omega * (r_p - l_edt), 0.0])
     
-    # EDT beads (Index 1 to N_edt) distributed along the radial line at y = -L_rope
-    l0_seg = l_edt / (params.N_edt + 1)
-    for i in range(1, params.N_edt + 1):
+    # EDT beads (Index 1 to N_edt-1) distributed along the radial line at y = -L_rope
+    l0_seg = l_edt / params.N_edt
+    for i in range(1, params.N_edt):
         # distance below SC
-        h_below = (params.N_edt + 1 - i) * l0_seg
+        h_below = (params.N_edt - i) * l0_seg
         r_node = r_p - h_below
         pos_orb[i] = np.array([r_node, -l_rope, 0.0])
         vel_orb[i] = np.array([omega * l_rope, omega * r_node, 0.0])
@@ -144,11 +146,17 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
         te = t_eval[i:j+1]  # both endpoints, len >= 2
 
         if method_u == 'RK45':
-            Y_chunk = rk45_dopri_integrate(te[0], te[-1], y, p_arr, te, rtol, atol)
+            Y_chunk = rk45_dopri_integrate(te[0], te[-1], y, p_arr, te, 1e-7, 1e-9)
+        elif method_u == 'VERLET':
+            Y_chunk = velocity_verlet_integrate(te[0], te[-1], y, p_arr, te)
         elif method_u == 'LSODA':
             Y_chunk = lsoda_integrate(te[0], te[-1], y, p_arr, te, rtol, atol)
+        elif method_u == 'RADAU':
+            sol = solve_ivp(lambda t, y: tether_dynamics_fast(t, y, p_arr), (te[0], te[-1]), y,
+                            method='Radau', t_eval=te, rtol=1e-5, atol=1e-7)
+            Y_chunk = sol.y.T
         else:
-            raise ValueError(f"Unknown method '{method}'. Use 'RK45' or 'LSODA'.")
+            raise ValueError(f"Unknown method '{method}'. Use 'RK45', 'VERLET' or 'LSODA'.")
 
         Y_out[i:j+1] = Y_chunk
         y = Y_chunk[-1].copy()
