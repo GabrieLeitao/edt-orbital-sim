@@ -1,6 +1,8 @@
 import numpy as np
 import os
 import hashlib
+import threading
+import time
 from frames import get_rotation_matrix_eci
 from integrators import rk45_dopri_integrate, velocity_verlet_integrate, lsoda_integrate, IntegratorSolution
 from dynamics import tether_dynamics_fast
@@ -82,19 +84,17 @@ def setup_initial_state(params):
     X0[3*num_masses:] = vel.flatten()
     return X0
 
-def save_checkpoint(run_folder, t, X, p_arr, history_t=None, history_X=None, total_compute_time=0.0):
+def save_checkpoint(run_folder, t, X, p_arr, current_idx=0, total_compute_time=0.0):
     """
-    Saves the current state and accumulated history to a binary checkpoint.
-    Performance: Using .npz for fast binary I/O of history arrays.
+    Saves the current state and metadata to a binary checkpoint.
+    History is managed separately via memory-mapped files.
     """
     p_hash = hashlib.sha256(p_arr.tobytes()).hexdigest()
     checkpoint_path = os.path.join(run_folder, "checkpoint.npz")
     
-    # Pack data. history_t/X are optional for simple state saves.
     save_args = {
         "t": t, "X": X, "p_arr": p_arr, "p_hash": p_hash,
-        "history_t": history_t if history_t is not None else np.array([]),
-        "history_X": history_X if history_X is not None else np.array([]),
+        "current_idx": current_idx,
         "total_compute_time": total_compute_time
     }
     np.savez(checkpoint_path, **save_args)
@@ -104,26 +104,25 @@ def save_checkpoint(run_folder, t, X, p_arr, history_t=None, history_X=None, tot
 
 def load_checkpoint(run_folder):
     """
-    Loads state and history from binary checkpoint.
-    Returns (t, X, p_arr, p_hash, history_t, history_X, total_compute_time).
+    Loads latest state and metadata from binary checkpoint.
     """
     checkpoint_path = os.path.join(run_folder, "checkpoint.npz")
     if os.path.exists(checkpoint_path):
         data = np.load(checkpoint_path)
         p_hash = str(data['p_hash']) if 'p_hash' in data.files else None
-        h_t = data['history_t'] if 'history_t' in data.files else None
-        h_X = data['history_X'] if 'history_X' in data.files else None
+        current_idx = int(data['current_idx']) if 'current_idx' in data.files else 0
         total_compute_time = float(data['total_compute_time']) if 'total_compute_time' in data.files else 0.0
-        return float(data['t']), data['X'], data['p_arr'], p_hash, h_t, h_X, total_compute_time
-    return None, None, None, None, None, None, 0.0
+        return float(data['t']), data['X'], data['p_arr'], p_hash, current_idx, total_compute_time
+    return None, None, None, None, 0, 0.0
 
 def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
-                     sampling_hz=1.0, method='RK45', progress_chunk_s=100.0):
+                     sampling_hz=1.0, method='RK45'):
     """
-    Pure integration driver. Dispatches to compiled integrators in `integrators.py`
-    (Numba RK45 / numbalsoda LSODA), keeping the integration loop free of Python
-    crossings. If `pbar` is provided, ticks it once per chunk of `progress_chunk_s`
-    simulated seconds; otherwise runs silently. Bar ownership is the caller's job.
+    Pure integration driver. Dispatches to compiled integrators in `integrators.py`,
+    keeping the integration loop free of Python crossings. 
+    
+    Progress is reported via shared memory and a background thread to keep the
+    UI responsive without 'breaking' the integrator's internal logic.
     """
     t0, tf = t_span
     span = tf - t0
@@ -137,34 +136,51 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
     Y_out = np.empty((n_total, n_state))
     Y_out[0] = X0
 
-    chunk_pts = max(2, int(progress_chunk_s * sampling_hz))
+    # Setup shared progress pointer (Slot 27 in p_arr_ext)
+    # We use a 28-element array to match integrators.P_ARR_LEN
+    p_arr_ext = np.zeros(28)
+    p_arr_ext[:len(p_arr)] = p_arr
+    p_arr_ext[27] = t0
+    
+    # Progress Monitor Thread
+    stop_event = threading.Event()
+    def monitor():
+        last_reported_t = t0
+        while not stop_event.is_set():
+            curr_t = p_arr_ext[27]
+            dt = int(curr_t - last_reported_t)
+            if dt > 0 and pbar is not None:
+                pbar.update(dt)
+                last_reported_t += dt
+            time.sleep(1.0) # 1Hz update as requested
 
-    y = X0.astype(np.float64).copy()
-    i = 0
-    while i < n_total - 1:
-        j = min(i + chunk_pts, n_total - 1)
-        te = t_eval[i:j+1]  # both endpoints, len >= 2
+    monitor_thread = threading.Thread(target=monitor, daemon=True)
+    if pbar is not None:
+        monitor_thread.start()
 
+    try:
+        y = X0.astype(np.float64).copy()
         if method_u == 'RK45':
-            Y_chunk = rk45_dopri_integrate(te[0], te[-1], y, p_arr, te, 1e-7, 1e-9)
+            # RK45 takes a view of the progress slot
+            rk45_dopri_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out, p_arr_ext[27:28])
         elif method_u == 'VERLET':
-            Y_chunk = velocity_verlet_integrate(te[0], te[-1], y, p_arr, te)
+            velocity_verlet_integrate(t0, tf, y, p_arr_ext, t_eval, Y_out, p_arr_ext[27:28])
         elif method_u == 'LSODA':
-            Y_chunk = lsoda_integrate(te[0], te[-1], y, p_arr, te, rtol, atol)
+            lsoda_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out)
         elif method_u == 'RADAU':
-            sol = solve_ivp(lambda t, y: tether_dynamics_fast(t, y, p_arr), (te[0], te[-1]), y,
-                            method='Radau', t_eval=te, rtol=1e-5, atol=1e-7)
-            Y_chunk = sol.y.T
+            sol = solve_ivp(lambda t, y: tether_dynamics_fast(t, y, p_arr), (t0, tf), y,
+                            method='Radau', t_eval=t_eval, rtol=1e-5, atol=1e-7)
+            Y_out[:] = sol.y.T
         else:
             raise ValueError(f"Unknown method '{method}'. Use 'RK45', 'VERLET' or 'LSODA'.")
-
-        Y_out[i:j+1] = Y_chunk
-        y = Y_chunk[-1].copy()
-
-        if pbar is not None:
-            dt_chunk = int(te[-1]) - int(te[0])
-            if dt_chunk > 0:
-                pbar.update(dt_chunk)
-        i = j
+    finally:
+        stop_event.set()
+        if monitor_thread.is_alive():
+            monitor_thread.join(timeout=2.0)
+            # Final catch-up update
+            if pbar is not None:
+                remaining = int(tf - p_arr_ext[27])
+                if remaining > 0:
+                    pbar.update(remaining)
 
     return IntegratorSolution(t=t_eval, y=Y_out.T)

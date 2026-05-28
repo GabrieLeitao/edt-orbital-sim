@@ -69,10 +69,10 @@ def recover_history_from_csv(run_folder, params):
     """Legacy Fallback: load telemetry history from CSV."""
     csv_path = os.path.join(run_folder, "simulation_results.csv")
     if not os.path.exists(csv_path):
-        return [], []
+        return None, None
         
     df = pd.read_csv(csv_path)
-    all_t = df['time_s'].values.tolist()
+    all_t = df['time_s'].values
     interleaved = df.iloc[:, 2:].values
     n_m = params.num_masses
     pos_rec = np.zeros((len(all_t), 3*n_m))
@@ -80,18 +80,18 @@ def recover_history_from_csv(run_folder, params):
     for i in range(n_m):
         pos_rec[:, 3*i:3*i+3] = interleaved[:, 6*i:6*i+3]
         vel_rec[:, 3*i:3*i+3] = interleaved[:, 6*i+3:6*i+6]
-    all_X = np.hstack([pos_rec, vel_rec]).tolist()
+    all_X = np.hstack([pos_rec, vel_rec])
     return all_t, all_X
 
-def handle_mission_resumption():
-    """Manages the logic for resuming an interrupted simulation."""
+def handle_mission_resumption(t_end, sampling_hz):
+    """Manages the logic for resuming an interrupted simulation using memmaps."""
     resumable_runs = find_resumable_runs()
     if not resumable_runs:
-        return None, 0.0, None, None, [], [], 0.0
+        return None, 0.0, None, None, None, None, 0, 0.0
 
     use_checkpoint = questionary.confirm("Found resumable runs. Would you like to resume?").ask()
     if not use_checkpoint:
-        return None, 0.0, None, None, [], [], 0.0
+        return None, 0.0, None, None, None, None, 0, 0.0
 
     run_name = questionary.select("Select run to resume:", choices=resumable_runs).ask()
     run_folder = os.path.join('results', run_name)
@@ -99,35 +99,60 @@ def handle_mission_resumption():
     yaml_path = os.path.join(run_folder, "config_params_results.yaml")
     if not os.path.exists(yaml_path):
         print(f"Error: YAML configuration missing for {run_name}. Cannot resume safely.")
-        return None, 0.0, None, None, [], [], 0.0
+        return None, 0.0, None, None, None, None, 0, 0.0
 
     params = SimulationParams.from_yaml(yaml_path)
     p_hash_curr = hashlib.sha256(params.to_numba_params().tobytes()).hexdigest()
     
-    t_s, X0, p_flat, p_hash_stored, h_t, h_X, total_comp = load_checkpoint(run_folder)
+    t_s, X0, p_flat, p_hash_stored, curr_idx, total_comp = load_checkpoint(run_folder)
     
     if p_hash_stored and p_hash_curr != p_hash_stored:
         print(f"CRITICAL ERROR: Parameter mismatch detected! Aborting.")
-        return None, 0.0, None, None, [], [], 0.0
+        return None, 0.0, None, None, None, None, 0, 0.0
 
-    # History recovery (Binary primary, CSV fallback)
-    if h_t is not None and len(h_t) > 0:
-        all_t, all_X = h_t.tolist(), h_X.tolist()
+    # Attach to existing memmaps
+    path_t = os.path.join(run_folder, "history_t.dat")
+    path_X = os.path.join(run_folder, "history_X.dat")
+    
+    n_total = int(t_end * sampling_hz) + 1
+    n_state = len(X0)
+    
+    if os.path.exists(path_t) and os.path.exists(path_X):
+        hist_t = np.memmap(path_t, dtype='float64', mode='r+', shape=(n_total,))
+        hist_X = np.memmap(path_X, dtype='float64', mode='r+', shape=(n_total, n_state))
     else:
-        all_t, all_X = recover_history_from_csv(run_folder, params)
+        # Fallback to CSV if memmaps missing
+        print("Memmaps missing. Recovering from CSV...")
+        h_t, h_X = recover_history_from_csv(run_folder, params)
+        hist_t = np.memmap(path_t, dtype='float64', mode='w+', shape=(n_total,))
+        hist_X = np.memmap(path_X, dtype='float64', mode='w+', shape=(n_total, n_state))
+        if h_t is not None:
+            hist_t[:len(h_t)] = h_t
+            hist_X[:len(h_X)] = h_X
+            curr_idx = len(h_t) - 1
 
-    if all_t and np.isclose(all_t[-1], t_s):
-        all_t.pop(); all_X.pop()
+    print(f"Resuming mission from t = {t_s:.1f}s (Index {curr_idx})")
+    return run_folder, t_s, X0, params, hist_t, hist_X, curr_idx, total_comp
 
-    print(f"Resuming mission from t = {t_s:.1f}s")
-    return run_folder, t_s, X0, params, all_t, all_X, total_comp
-
-def initialize_new_mission():
-    """Sets up a fresh simulation run."""
+def initialize_new_mission(t_end, sampling_hz):
+    """Sets up a fresh simulation run with pre-allocated memmaps."""
     params = SimulationParams()
     X0 = setup_initial_state(params)
     run_name = f"run_{len(os.listdir('results'))+1:03d}"
     run_folder = get_results_folder(run_name)
+    
+    n_total = int(t_end * sampling_hz) + 1
+    n_state = len(X0)
+    
+    # Pre-allocate memmaps
+    path_t = os.path.join(run_folder, "history_t.dat")
+    path_X = os.path.join(run_folder, "history_X.dat")
+    hist_t = np.memmap(path_t, dtype='float64', mode='w+', shape=(n_total,))
+    hist_X = np.memmap(path_X, dtype='float64', mode='w+', shape=(n_total, n_state))
+    
+    # Store initial state
+    hist_t[0] = 0.0
+    hist_X[0] = X0
     
     # Save Initial Config
     dummy_t = np.array([0.0])
@@ -136,77 +161,94 @@ def initialize_new_mission():
     save_config_params_results_yaml("config_params_results.yaml", run_folder, dummy_t, dummy_sma, params, params.to_numba_params())
     
     print(f"Starting new simulation: {run_name}")
-    return run_folder, 0.0, X0, params, [], [], 0.0
+    return run_folder, 0.0, X0, params, hist_t, hist_X, 0, 0.0
 
 def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
+    # 0. Constants
+    sampling_hz = 1.0
+    t_end = 5400 * 2 # 2 orbits
+    step_size = 1000.0
+
     # 1. Setup Phase
-    rf, t_start, X0, params, all_t, all_X, comp_prev = handle_mission_resumption()
+    rf, t_start, X_curr, params, hist_t, hist_X, curr_idx, comp_prev = handle_mission_resumption(t_end, sampling_hz)
     if rf is None: # New run
-        rf, t_start, X0, params, all_t, all_X, comp_prev = initialize_new_mission()
+        rf, t_start, X_curr, params, hist_t, hist_X, curr_idx, comp_prev = initialize_new_mission(t_end, sampling_hz)
 
     p_arr = params.to_numba_params()
 
     # 2. Stability Guard Phase (Pre-flight)
     if t_start == 0.0 and not skip_test:
-        is_stable, msg = run_preflight_stability_check(X0, p_arr, params, method)
+        is_stable, msg = run_preflight_stability_check(X_curr, p_arr, params, method)
         if not is_stable:
             print(f"CRITICAL: Simulation aborted during pre-flight. {msg}")
             return
 
-    t_end = 5400 * 4# Simulate for 10 orbits (~9 hours)
-    step_size = 1000.0
-    t_curr, X_curr = t_start, X0
     session_start = time.time()
     print(f"\n--- Starting Simulation ---\nMethod: {method}\nTotal Duration: {t_end/3600:.2f} hours\nCheckpointing: {'Disabled' if skip_checkpoint else 'Enabled'}\nPre-flight Test: {'Skipped' if skip_test else 'Enabled'}\n")
     
+    t_curr = t_start
     # 3. Execution Phase (Segmented Integration Loop)
     with tqdm(total=int(t_end), initial=int(t_start), unit='s', desc="Mission Progress") as pbar:
         while t_curr < t_end:
             t_next = min(t_curr + step_size, t_end)
             
-            # Performance: Sampling at 1Hz prevents memory bloat (checkpoint stays < 10MB)
-            sol = integrate_system(X_curr, (t_curr, t_next), p_arr, pbar=pbar, sampling_hz=1.0, method=method)
+            # Calculate indices for memmap slicing
+            # n_seg = (t_next - t_curr) * sampling_hz
+            n_seg = int((t_next - t_curr) * sampling_hz)
+            next_idx = curr_idx + n_seg
             
-            # Segment Data
-            seg_t = sol.t
-            seg_X = sol.y.T
+            # Slices (include current point as starting point for integrator)
+            # engine.integrate_system will fill these in-place
+            sol = integrate_system(X_curr, (t_curr, t_next), p_arr, pbar=pbar, sampling_hz=sampling_hz, method=method)
+            
+            # Copy solution to memmap
+            # Note: sol.t[0] and sol.y[:,0] are the same as t_curr and X_curr
+            # We overwrite the segment in memmap starting from curr_idx
+            len_sol = len(sol.t)
+            hist_t[curr_idx : curr_idx + len_sol] = sol.t
+            hist_X[curr_idx : curr_idx + len_sol] = sol.y.T
+            
+            # Update state for next segment
+            t_curr = sol.t[-1]
+            X_curr = sol.y[:, -1]
+            curr_idx = curr_idx + len_sol - 1
             
             # Mid-loop Health Check
-            is_sane, reason = check_state_sanity(seg_X[-1], params)
+            is_sane, reason = check_state_sanity(X_curr, params)
             if not is_sane:
                 print(f"\nCRITICAL: Simulation became unstable at t={t_curr:.1f}s. {reason}")
                 break
-
-            all_t.extend(seg_t); all_X.extend(seg_X)
-            t_curr, X_curr = seg_t[-1], seg_X[-1]
             
-            # Binary Checkpoint + Silent CSV (if enabled)
+            # Binary Checkpoint (Metadata only)
             if not skip_checkpoint:
                 pbar.set_postfix_str("Checkpointing...")
-                
-                # Update cumulative compute time
                 total_comp = comp_prev + (time.time() - session_start)
+                save_checkpoint(rf, t_curr, X_curr, p_arr, current_idx=curr_idx, total_compute_time=total_comp)
                 
-                # Checkpoint keeps full history for lossless resume
-                save_checkpoint(rf, t_curr, X_curr, p_arr, np.array(all_t), np.array(all_X), total_compute_time=total_comp)
-                
-                # Performance: Append only the NEW segment to CSV to avoid RAM spikes
-                tel_seg = post_process_telemetry(np.array(seg_t), np.array(seg_X), p_arr, params)
-                save_csv("simulation_results.csv", rf, np.array(seg_t), tel_seg, np.array(seg_X), params, silent=True, append=True)
-                
+                # Silent CSV update (append only the new segment)
+                # Performance: include_sma=False avoids expensive orbital calculations mid-loop
+                tel_seg = post_process_telemetry(sol.t, sol.y.T, p_arr, params, include_sma=False)
+                save_csv("simulation_results.csv", rf, sol.t, tel_seg, sol.y.T, params, silent=True, append=True)
                 pbar.set_postfix_str("")
 
-    # 3. Finalization Phase
+    # 4. Finalization Phase
     total_compute_time = comp_prev + (time.time() - session_start)
     print(f"\n--- Mission Complete ---")
     print(f"Session Compute Time: {(time.time() - session_start)/60:.2f} minutes")
     print(f"Total Compute Time (All Sessions): {total_compute_time/60:.2f} minutes")
     print(f"Total Simulated Time: {t_curr/3600:.2f} hours")
 
-    all_t, all_X = np.array(all_t), np.array(all_X)
-    sma_final = calculate_com_sma(all_t, all_X, p_arr, params)
-    save_config_params_results_yaml("config_params_results.yaml", rf, all_t, sma_final, params, p_arr, is_final=True, total_compute_time=total_compute_time)
-    plot_simulation(all_t, sma_final, all_X, params, rf)
+    # Flush memmaps to disk
+    hist_t.flush()
+    hist_X.flush()
+
+    # Post-process full history from memmap
+    final_t = hist_t[:curr_idx+1]
+    final_X = hist_X[:curr_idx+1]
+    
+    sma_final = calculate_com_sma(final_t, final_X, p_arr, params)
+    save_config_params_results_yaml("config_params_results.yaml", rf, final_t, sma_final, params, p_arr, is_final=True, total_compute_time=total_compute_time)
+    plot_simulation(final_t, sma_final, final_X, params, rf)
 
 def parse_arguments():
     """Handles command-line argument parsing."""

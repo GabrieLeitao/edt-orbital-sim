@@ -39,7 +39,7 @@ def run_validation():
     # 1. Initialize
     X0 = setup_initial_state(params)
     
-    t_end = 10000
+    t_end = 1000
     method = 'RK45'
     print(f"\n--- Starting Validation ---\nMethod: {method}\nTotal Duration: {t_end/3600:.2f} hours\n")
     

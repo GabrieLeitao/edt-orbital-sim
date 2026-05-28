@@ -27,8 +27,8 @@ class SimulationParams:
         self.beta_rope = 2.0 * 0.5 / w_rope
 
         # 4. EDT Properties (SC-Tip)
-        self.L_edt = 500.0            # Total EDT length [m]
-        self.N_edt = 6               # Number of segments
+        self.L_edt = 200.0            # Total EDT length [m]
+        self.N_edt = 5               # Number of segments
         self.E_edt = 70e9             # Young's Modulus (Aluminum) [Pa]
 
         self.diam_edt = 0.0015        # 1.5mm wire

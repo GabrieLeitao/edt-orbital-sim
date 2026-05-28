@@ -20,8 +20,8 @@ from dynamics import tether_dynamics_fast
 
 
 # Length of the flat parameter array from SimulationParams.to_numba_params().
-# Used to size the carray view inside the cfunc RHS.
-P_ARR_LEN = 27
+# Increased to 28 to include a slot for progress reporting (IDX_PROGRESS_T = 27).
+P_ARR_LEN = 28
 
 
 # ---------------------------------------------------------------------------
@@ -39,19 +39,19 @@ _B1 = 35.0/384.0; _B3 = 500.0/1113.0; _B4 = 125.0/192.0; _B5 = -2187.0/6784.0; _
 _E1 = 71.0/57600.0; _E3 = -71.0/16695.0; _E4 = 71.0/1920.0; _E5 = -17253.0/339200.0; _E6 = 22.0/525.0; _E7 = -1.0/40.0
 
 
-@njit(fastmath=True, cache=True)
-def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol):
+@njit(fastmath=True, cache=True, nogil=True)
+def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol, Y_out, progress_ptr):
     """
     Adaptive Dormand-Prince 5(4) integrator with FSAL.
     Output at t_eval via cubic Hermite interpolation.
 
-    Returns Y of shape (len(t_eval), n_state). Y[0] == y0; t_eval[0] must == t0.
+    Fills Y_out in-place. Y_out shape (len(t_eval), n_state). 
+    Y_out[0] == y0; t_eval[0] must == t0.
+    Updates progress_ptr[0] with current t.
     """
     n = y0.shape[0]
     m = t_eval.shape[0]
-    Y = np.empty((m, n))
-    for i in range(n):
-        Y[0, i] = y0[i]
+    # Y_out[0] is already assumed to be y0 from caller
 
     # Stage buffers
     k1 = np.empty(n); k2 = np.empty(n); k3 = np.empty(n)
@@ -73,7 +73,6 @@ def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol):
     dt_wave = dl / c_s
     
     # Step limits: h_max must resolve wave propagation across one element
-    # Use 0.5 * dt_wave as h_max to ensure Nyquist-like sampling of longitudinal waves
     h = 0.1 * dt_wave
     h_max = 0.5 * dt_wave
     h_min = 1e-9
@@ -141,7 +140,7 @@ def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol):
                 te = t_eval[eval_idx]
                 if te >= t_new - 1e-12:
                     for i in range(n):
-                        Y[eval_idx, i] = y_new[i]
+                        Y_out[eval_idx, i] = y_new[i]
                 else:
                     s = (te - t) / h
                     s2 = s * s
@@ -151,13 +150,14 @@ def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol):
                     h01 = -2.0*s3 + 3.0*s2
                     h11 = s3 - s2
                     for i in range(n):
-                        Y[eval_idx, i] = h00*y[i] + h10*h*k1[i] + h01*y_new[i] + h11*h*k7[i]
+                        Y_out[eval_idx, i] = h00*y[i] + h10*h*k1[i] + h01*y_new[i] + h11*h*k7[i]
                 eval_idx += 1
 
             for i in range(n):
                 y[i] = y_new[i]
                 k1[i] = k7[i]
             t = t_new
+            progress_ptr[0] = t # Memory-based progress report
 
             if err_norm < 1e-10:
                 h_factor = 5.0
@@ -173,34 +173,32 @@ def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol):
             if h_factor < 0.1: h_factor = 0.1
             h *= h_factor
             if h < h_min:
-                # Step floor hit — bail out, caller treats incomplete Y as failure
                 break
 
     # Fill any trailing un-evaluated points with the last state (defensive)
     while eval_idx < m:
         for i in range(n):
-            Y[eval_idx, i] = y[i]
+            Y_out[eval_idx, i] = y[i]
         eval_idx += 1
 
-    return Y
+    return Y_out
 
 
-@njit(fastmath=True, cache=True)
-def velocity_verlet_integrate(t0, tf, y0, p_arr, t_eval):
+@njit(fastmath=True, cache=True, nogil=True)
+def velocity_verlet_integrate(t0, tf, y0, p_arr, t_eval, Y_out, progress_ptr):
     """
     Fixed-step Velocity Verlet integrator.
     Symplectic (2nd order) for conservative forces.
     
-    Handles velocity-dependent forces (damping, drag, Lorentz) via a 
-    predictor-corrector approach for the second velocity update.
+    Fills Y_out in-place. Y_out shape (len(t_eval), n_state).
+    Updates progress_ptr[0] with current t.
     """
     n_state = y0.shape[0]
     m_eval = t_eval.shape[0]
     n_masses = n_state // 6
     n_dof = 3 * n_masses
     
-    Y = np.empty((m_eval, n_state))
-    Y[0] = y0
+    # Y_out[0] assumed filled by caller
     
     # CFL-based fixed step
     l_edt = p_arr[p.IDX_L_EDT]
@@ -230,16 +228,14 @@ def velocity_verlet_integrate(t0, tf, y0, p_arr, t_eval):
             dt_step = dt
             
         # 1. Half-step velocity
-        # v_half = v_n + 0.5 * a_n * dt
         v_n = y[n_dof:]
         v_half = v_n + 0.5 * a_n * dt_step
         
         # 2. Full-step position
-        # x_next = x_n + v_half * dt
         x_n = y[:n_dof]
         x_next = x_n + v_half * dt_step
         
-        # 3. Predictor step for acceleration (a_next depends on x_next, v_half)
+        # 3. Predictor step for acceleration
         t_next = t + dt_step
         y_pred = np.empty(n_state)
         y_pred[:n_dof] = x_next
@@ -249,22 +245,22 @@ def velocity_verlet_integrate(t0, tf, y0, p_arr, t_eval):
         a_next = dx_next[n_dof:]
         
         # 4. Final velocity update
-        # v_next = v_half + 0.5 * a_next * dt
         v_next = v_half + 0.5 * a_next * dt_step
         
         # Update state
         y[:n_dof] = x_next
         y[n_dof:] = v_next
-        a_n = a_next # Reuse for next step
+        a_n = a_next 
         t = t_next
+        progress_ptr[0] = t
         
         # Dense output at t_eval points
         while eval_idx < m_eval and t_eval[eval_idx] <= t + 1e-12:
-            # Nearest neighbor for fixed-step output
-            Y[eval_idx] = y
+            for k in range(n_state):
+                Y_out[eval_idx, k] = y[k]
             eval_idx += 1
             
-    return Y
+    return Y_out
 
 
 # ---------------------------------------------------------------------------
@@ -284,13 +280,17 @@ def _get_lsoda():
 
     from numbalsoda import lsoda_sig, lsoda as lsoda_driver
 
-    @cfunc(lsoda_sig)
+    @cfunc(lsoda_sig, nogil=True)
     def _rhs_lsoda(t, y_ptr, dy_ptr, p_ptr):
         p_arr = nb.carray(p_ptr, (P_ARR_LEN,))
         n_edt = int(p_arr[p.IDX_N_EDT])
         neq = 6 * (2 + n_edt)
         y = nb.carray(y_ptr, (neq,))
         dy = nb.carray(dy_ptr, (neq,))
+        
+        # Report progress (Slot 27)
+        p_arr[27] = t
+        
         dx = tether_dynamics_fast(t, y, p_arr)
         for i in range(neq):
             dy[i] = dx[i]
@@ -300,17 +300,18 @@ def _get_lsoda():
     return _LSODA_FUNCPTR, _lsoda_driver
 
 
-def lsoda_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol):
+def lsoda_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol, Y_out):
     """
-    Numbalsoda LSODA wrapper. Returns Y of shape (len(t_eval), n_state).
-    First t_eval value must equal t0; first row equals y0 by construction.
+    Numbalsoda LSODA wrapper. Fills Y_out in-place.
     """
     funcptr, lsoda = _get_lsoda()
     usol, success = lsoda(funcptr, y0, t_eval,
                           data=p_arr, rtol=rtol, atol=atol, mxstep=50000)
     if not success:
         raise RuntimeError(f"LSODA failed in interval [{t0}, {tf}]")
-    return usol
+    
+    Y_out[:] = usol
+    return Y_out
 
 
 # ---------------------------------------------------------------------------

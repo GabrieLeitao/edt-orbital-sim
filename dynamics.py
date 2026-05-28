@@ -4,7 +4,7 @@ import params as p
 from environment import get_environment_optimized
 from frames import get_earth_rotation_components
 
-@njit(fastmath=True)
+@njit(fastmath=True, nogil=True)
 def get_mass_fast(idx, p_arr, num_masses):
     """
     Numba-compatible mass lookup with lumped-mass distribution.
@@ -29,7 +29,7 @@ def get_mass_fast(idx, p_arr, num_masses):
     else:
         return 0.0
 
-@njit(fastmath=True)
+@njit(fastmath=True, nogil=True)
 def smooth_tension(dl, dl_dot, k, beta):
     """
     Calculates tension with a smooth transition from slack to taut.
@@ -65,7 +65,7 @@ def smooth_tension(dl, dl_dot, k, beta):
     
     return max(0.0, tension)
 
-@njit(fastmath=True)
+@njit(fastmath=True, nogil=True)
 def tether_dynamics_fast(t, X, p_arr):
     """
     Numba-JIT optimized core dynamics.

@@ -80,7 +80,7 @@ def calculate_com_sma(t_vals, X_vals, p_arr, params):
     sma_com = -params.mu / (2.0 * energy_com)
     return sma_com
 
-def post_process_telemetry(t_vals, X_vals, p_arr, params):
+def post_process_telemetry(t_vals, X_vals, p_arr, params, include_sma=True):
     """
     Extracts high-fidelity physical metrics from the integrated state vector.
     
@@ -104,7 +104,9 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params):
     lorentz = np.zeros(count)
     drag = np.zeros(count)
     
-    sma = calculate_com_sma(t_vals, X_vals, p_arr, params)
+    sma = np.zeros(count)
+    if include_sma:
+        sma = calculate_com_sma(t_vals, X_vals, p_arr, params)
 
     idx_sc = params.N_edt
     idx_target = params.N_edt + 1
@@ -182,25 +184,27 @@ def save_csv(filename, run_folder, t_vals, telemetry_dict, X_vals, params, silen
     if not silent:
         print(f"Data {'appended' if append else 'saved'} to {filepath}")
 
-def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com, params, p_arr=None, is_final=False, silent=False, total_compute_time=0.0):
+def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com=None, params=None, p_arr=None, is_final=False, silent=False, total_compute_time=0.0):
     """
     Saves simulation parameters and key results to a YAML file for easy reference.
     Differentiates between initial setup and final mission report.
     """
     run_id = os.path.basename(os.path.normpath(run_folder))
 
-    initial_sma = sma_com[0]
-    final_sma = sma_com[-1]
-    sma_drop = initial_sma - final_sma
+    results = {}
+    if sma_com is not None:
+        initial_sma = sma_com[0]
+        final_sma = sma_com[-1]
+        sma_drop = initial_sma - final_sma
 
-    results = {
-        "com_sma_initial_m": float(initial_sma),
-        "com_sma_final_m": float(final_sma),
-        "com_sma_drop_m": float(sma_drop),
-        "simulation_time_s": float(t_vals[-1] - t_vals[0]),
-        "total_simulated_time_s": float(t_vals[-1]),
-        "total_compute_time_s": float(total_compute_time)
-    }
+        results = {
+            "com_sma_initial_m": float(initial_sma),
+            "com_sma_final_m": float(final_sma),
+            "com_sma_drop_m": float(sma_drop),
+            "simulation_time_s": float(t_vals[-1] - t_vals[0]),
+            "total_simulated_time_s": float(t_vals[-1]),
+            "total_compute_time_s": float(total_compute_time)
+        }
 
     # Generate Hashes
     p_hash = "N/A"
@@ -208,7 +212,7 @@ def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com, param
 
     if p_arr is not None:
         p_hash = hashlib.sha256(p_arr.tobytes()).hexdigest()
-        if is_final:
+        if is_final and results:
             # Generate a composite hash for the entire report (Params + Results)
             # KISS: Join p_hash with a string representation of the results dict
             report_input = p_hash + str(results)
@@ -221,12 +225,12 @@ def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com, param
             "parameter_hash": p_hash,
             "report_hash": report_hash
         },
-        "parameters": params.to_dict(),
+        "parameters": params.to_dict() if params else {},
     }
-    
-    if is_final:
+
+    if results:
         output_data["results"] = results
-        
+
     filepath = os.path.join(run_folder, filename)
 
     with open(filepath, 'w') as file:
