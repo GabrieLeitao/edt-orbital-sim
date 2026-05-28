@@ -137,6 +137,17 @@ def handle_mission_resumption(t_end, sampling_hz):
 def initialize_new_mission(t_end, sampling_hz):
     """Sets up a fresh simulation run with pre-allocated memmaps."""
     params = SimulationParams()
+    
+    # Allow user to choose mission configuration
+    config = questionary.select(
+        "Select Mission Configuration:",
+        choices=[
+            {"name": "Perpendicular (SC/Target in-track, EDT radial)", "value": "PERPENDICULAR"},
+            {"name": "Radial (All components radially aligned)", "value": "RADIAL"}
+        ]
+    ).ask()
+    params.mission_config = config
+    
     X0 = setup_initial_state(params)
     run_name = f"run_{len(os.listdir('results'))+1:03d}"
     run_folder = get_results_folder(run_name)
@@ -160,7 +171,7 @@ def initialize_new_mission(t_end, sampling_hz):
     dummy_sma = calculate_com_sma(dummy_t, dummy_X, params.to_numba_params(), params)
     save_config_params_results_yaml("config_params_results.yaml", run_folder, dummy_t, dummy_sma, params, params.to_numba_params())
     
-    print(f"Starting new simulation: {run_name}")
+    print(f"Starting new simulation: {run_name} ({params.mission_config})")
     return run_folder, 0.0, X0, params, hist_t, hist_X, 0, 0.0
 
 def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):

@@ -8,17 +8,23 @@ This project provides a high-fidelity Python simulation of an Active Debris Remo
 The simulation follows advanced methodologies from scientific literature (e.g., *Zhong & Zhu, 2014*, *ProSEDS Mission Reports*) to ensure both physical realism and numerical stability.
 
 ### 1. Multi-Body Dynamics (Lumped Mass Model)
-The system is modeled as a chain of 13 point masses in Earth-Centered Inertial (ECI) coordinates.
+The system is modeled as a chain of **7 point masses** (default: $N_{edt}=5$) in Earth-Centered Inertial (ECI) coordinates.
+- **Node Indices:** Node 0 (Tip) -> Nodes 1-4 (EDT Beads) -> Node 5 (Spacecraft) -> Node 6 (Target).
 - **Material-Based Stiffness:** Unlike basic models using arbitrary springs, this simulation derives stiffness ($k = EA/L$) from real material properties:
-  - **EDT:** 70 GPa Aluminum (1mm diameter).
-  - **Rope:** 100 GPa Kevlar/Polymer (2mm diameter).
+  - **EDT:** 70 GPa Aluminum (1.5mm diameter).
+  - **Rope:** 100 GPa Kevlar (2mm diameter).
 - **Rayleigh (Proportional) Damping:** Implements stiffness-proportional damping ($c = \beta k$). This allows the use of high-fidelity stiffness while suppressing high-frequency numerical "chatter" (the bouncing effect) without sacrificing physical accuracy.
-- **Smooth-Slack Transition:** Replaces the discontinuous `max(0, tension)` with a sigmoid-scaled smooth transition. This eliminates numerical shocks when the tether retightens, simulating the microscopic "tightening" of molecular bonds.
+- **Smooth-Slack Transition:** Replaces the discontinuous `max(0, tension)` with a sigmoid-scaled smooth transition. This eliminates numerical shocks when the tether retightens.
 
 ### 2. Environmental Forces
-- **Gravity (J2):** Includes Earth's central gravity and the **J2 perturbation** (zonal harmonic $J_2 = 1.0826 \times 10^{-3}$). This captures the primary orbital perturbations (nodal regression, perigee precession).
-- **Magnetic Field:** Implements the **IGRF-2000 Model** (up to Degree 4). This captures the Earth's non-dipole components and the South Atlantic Anomaly (SAA), crucial for realistic Lorentz force calculations in LEO.
-- **Atmospheric Drag:** **Multi-layer Exponential Model** (Vallado/US Standard Atmosphere 1976) with **Harris-Priester Diurnal Bulge** correction and **Earth Rotation** (relative wind). This accounts for altitude-dependent scale heights and day/night density variations (2x-5x difference in LEO).
+- **Gravity (J2):** Includes Earth's central gravity and the **J2 perturbation** (zonal harmonic $J_2 = 1.0826 \times 10^{-3}$).
+- **Magnetic Field:** Implements the **IGRF-2000 Model** (up to Degree 4). This captures the Earth's non-dipole components and the South Atlantic Anomaly (SAA).
+- **Atmospheric Drag:** **Multi-layer Exponential Model** (Vallado/US Standard Atmosphere 1976) with **Harris-Priester Diurnal Bulge** correction.
+
+## Mission Configurations
+The simulation now supports two initial alignment modes, selectable at the start of a new mission:
+- **Perpendicular (Default):** The Spacecraft and Target are separated in-track (horizontal), with the EDT deployed radially inward. This is the standard "Gravity-Gradient stable" starting point for most tether missions.
+- **Radial:** All components (Target, SC, and EDT) are aligned along the local vertical. The Target is farthest from Earth, and the EDT tip is closest. This mode tests the system's response to a purely vertical deployment.
 
 ## Environmental Fidelity & Scientific Suitability
 

@@ -61,6 +61,7 @@ class SimulationParams:
         self.alt = 800e3              # Altitude [m]
         self.inc = np.radians(51.6)   # Inclination [rad]
         self.e = 0.001                # Near-circular eccentricity
+        self.mission_config = 'PERPENDICULAR' # 'PERPENDICULAR' or 'RADIAL'
 
     @property
     def num_masses(self):
@@ -69,6 +70,7 @@ class SimulationParams:
     def to_dict(self):
         """Converts parameters to a structured dictionary for YAML export."""
         return {
+            "mission_config": self.mission_config,
             "physical_constants": {
                 "mu": float(self.mu),
                 "R_e": float(self.R_e),
@@ -134,6 +136,9 @@ class SimulationParams:
 
         # Instantiate a new object with base defaults
         obj = cls()
+        
+        # 0. Mission Config
+        obj.mission_config = p_dict.get("mission_config", obj.mission_config)
         
         # 1. Physical Constants
         phys = p_dict.get("physical_constants", {})
