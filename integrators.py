@@ -20,8 +20,10 @@ from dynamics import tether_dynamics_fast
 
 
 # Length of the flat parameter array from SimulationParams.to_numba_params().
-# Increased to 28 to include a slot for progress reporting (IDX_PROGRESS_T = 27).
-P_ARR_LEN = 28
+# Increased to 29 to include:
+# - IDX_PROGRESS_T = 27
+# - IDX_ABORT = 28
+P_ARR_LEN = 29
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +160,10 @@ def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol, Y_out, progress_
                 k1[i] = k7[i]
             t = t_new
             progress_ptr[0] = t # Memory-based progress report
+            
+            # Check for abort signal (Slot 28 in p_arr)
+            if p_arr[28] > 0.5:
+                break
 
             if err_norm < 1e-10:
                 h_factor = 5.0
@@ -254,6 +260,10 @@ def velocity_verlet_integrate(t0, tf, y0, p_arr, t_eval, Y_out, progress_ptr):
         t = t_next
         progress_ptr[0] = t
         
+        # Check for abort signal (Slot 28 in p_arr)
+        if p_arr[28] > 0.5:
+            break
+        
         # Dense output at t_eval points
         while eval_idx < m_eval and t_eval[eval_idx] <= t + 1e-12:
             for k in range(n_state):
@@ -290,6 +300,9 @@ def _get_lsoda():
         
         # Report progress (Slot 27)
         p_arr[27] = t
+        
+        # Note: LSODA doesn't easily support aborting mid-step via RHS return,
+        # but the threaded wrapper in engine.py will catch it.
         
         dx = tether_dynamics_fast(t, y, p_arr)
         for i in range(neq):

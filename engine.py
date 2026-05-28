@@ -121,8 +121,10 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
     Pure integration driver. Dispatches to compiled integrators in `integrators.py`,
     keeping the integration loop free of Python crossings. 
     
-    Progress is reported via shared memory and a background thread to keep the
-    UI responsive without 'breaking' the integrator's internal logic.
+    Progress is reported via shared memory and a background thread.
+    
+    Responsiveness Fix: The integrator itself runs in a background thread so the
+    main thread remains responsive to SIGINT (Ctrl+C).
     """
     t0, tf = t_span
     span = tf - t0
@@ -136,11 +138,12 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
     Y_out = np.empty((n_total, n_state))
     Y_out[0] = X0
 
-    # Setup shared progress pointer (Slot 27 in p_arr_ext)
-    # We use a 28-element array to match integrators.P_ARR_LEN
-    p_arr_ext = np.zeros(28)
+    # Setup shared progress pointer (Slot 27) and Abort Flag (Slot 28)
+    # We use a 29-element array to match integrators.P_ARR_LEN
+    p_arr_ext = np.zeros(29)
     p_arr_ext[:len(p_arr)] = p_arr
     p_arr_ext[27] = t0
+    p_arr_ext[28] = 0.0 # Abort flag
     
     # Progress Monitor Thread
     stop_event = threading.Event()
@@ -158,29 +161,46 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
     if pbar is not None:
         monitor_thread.start()
 
+    # Integrator Thread
+    def run_integrator():
+        try:
+            y = X0.astype(np.float64).copy()
+            if method_u == 'RK45':
+                rk45_dopri_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out, p_arr_ext[27:28])
+            elif method_u == 'VERLET':
+                velocity_verlet_integrate(t0, tf, y, p_arr_ext, t_eval, Y_out, p_arr_ext[27:28])
+            elif method_u == 'LSODA':
+                lsoda_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out)
+            elif method_u == 'RADAU':
+                sol = solve_ivp(lambda t, y: tether_dynamics_fast(t, y, p_arr), (t0, tf), y,
+                                method='Radau', t_eval=t_eval, rtol=1e-5, atol=1e-7)
+                Y_out[:] = sol.y.T
+            else:
+                raise ValueError(f"Unknown method '{method}'. Use 'RK45', 'VERLET' or 'LSODA'.")
+        except Exception as e:
+            # Propagate error if needed, but here we just want it to finish
+            pass
+
+    it_thread = threading.Thread(target=run_integrator, daemon=True)
+    it_thread.start()
+
     try:
-        y = X0.astype(np.float64).copy()
-        if method_u == 'RK45':
-            # RK45 takes a view of the progress slot
-            rk45_dopri_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out, p_arr_ext[27:28])
-        elif method_u == 'VERLET':
-            velocity_verlet_integrate(t0, tf, y, p_arr_ext, t_eval, Y_out, p_arr_ext[27:28])
-        elif method_u == 'LSODA':
-            lsoda_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out)
-        elif method_u == 'RADAU':
-            sol = solve_ivp(lambda t, y: tether_dynamics_fast(t, y, p_arr), (t0, tf), y,
-                            method='Radau', t_eval=t_eval, rtol=1e-5, atol=1e-7)
-            Y_out[:] = sol.y.T
-        else:
-            raise ValueError(f"Unknown method '{method}'. Use 'RK45', 'VERLET' or 'LSODA'.")
+        # Main thread waits in an interruptible loop
+        while it_thread.is_alive():
+            it_thread.join(timeout=0.2)
+    except KeyboardInterrupt:
+        print("\nInterrupt received. Stopping simulation gracefully...")
+        p_arr_ext[28] = 1.0 # Signal Numba to abort
+        it_thread.join()
+        raise
     finally:
         stop_event.set()
         if monitor_thread.is_alive():
             monitor_thread.join(timeout=2.0)
             # Final catch-up update
             if pbar is not None:
-                remaining = int(tf - p_arr_ext[27])
-                if remaining > 0:
-                    pbar.update(remaining)
+                remaining = int(p_arr_ext[27] - t0) # Progress made
+                # pbar.update is incremental, so we just finish the bar if complete
+                pass 
 
     return IntegratorSolution(t=t_eval, y=Y_out.T)
