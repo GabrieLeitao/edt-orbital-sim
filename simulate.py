@@ -10,7 +10,8 @@ from tqdm import tqdm
 
 from params import SimulationParams
 from engine import setup_initial_state, integrate_system, save_checkpoint, load_checkpoint
-from analysis import calculate_com_sma, save_csv, save_config_params_results_yaml, post_process_telemetry
+from analysis import (calculate_com_sma, save_csv, save_config_params_results_yaml, 
+                      post_process_telemetry, calculate_mission_results)
 from utils import get_results_folder
 
 from stability import run_preflight_stability_check, check_state_sanity
@@ -148,6 +149,16 @@ def initialize_new_mission(t_end, sampling_hz):
     ).ask()
     params.mission_config = config
     
+    # 8. Control Setup
+    control_enable = questionary.confirm("Enable Closed-Loop Libration Control?").ask()
+    params.control_enable = control_enable
+    if control_enable:
+        limit_deg = questionary.text("Libration Angle Limit [deg]:", default="20.0").ask()
+        params.pitch_limit = np.radians(float(limit_deg))
+        
+        kp = questionary.text("Control Gain Kp [V/rad]:", default="50.0").ask()
+        params.k_p = float(kp)
+
     X0 = setup_initial_state(params)
     run_name = f"run_{len(os.listdir('results'))+1:03d}"
     run_folder = get_results_folder(run_name)
@@ -177,8 +188,8 @@ def initialize_new_mission(t_end, sampling_hz):
 def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
     # 0. Constants
     sampling_hz = 1.0
-    t_end = 5400 * 4 # 2 orbits
-    step_size = 1000.0
+    t_end = 5400 * 2 # 2 orbits
+    step_size = 100000.0
 
     # 1. Setup Phase
     rf, t_start, X_curr, params, hist_t, hist_X, curr_idx, comp_prev = handle_mission_resumption(t_end, sampling_hz)
@@ -258,6 +269,15 @@ def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
     final_X = hist_X[:curr_idx+1]
     
     sma_final = calculate_com_sma(final_t, final_X, p_arr, params)
+    res = calculate_mission_results(final_t, sma_final, params, total_compute_time)
+    
+    if res:
+        print(f"--- Statistical Mission Results ---")
+        print(f"Total SMA Drop (Raw): {res['com_sma_drop_total_m']/1000.0:.3f} km")
+        print(f"Mean Decay Rate: {res['mean_decay_rate_mps']:.4f} m/s ({res['mean_decay_rate_kmhr']:.4f} km/hr)")
+        print(f"Projected Decay: {res['mean_decay_per_orbit_m']:.3f} m/orbit and {res['mean_decay_rate_kmyear']:.2f} km/year")
+        print(f"Projected Decay: {res['mean_decay_rate_kmyear']:.2f} km/year")
+
     save_config_params_results_yaml("config_params_results.yaml", rf, final_t, sma_final, params, p_arr, is_final=True, total_compute_time=total_compute_time)
     plot_simulation(final_t, sma_final, final_X, params, rf)
 

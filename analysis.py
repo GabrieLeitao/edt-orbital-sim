@@ -184,6 +184,65 @@ def save_csv(filename, run_folder, t_vals, telemetry_dict, X_vals, params, silen
     if not silent:
         print(f"Data {'appended' if append else 'saved'} to {filepath}")
 
+def calculate_mission_results(t_vals, sma_com, params, total_compute_time=0.0):
+    """
+    Calculates comprehensive mission metrics from simulation history.
+    Uses linear regression to find the mean decay rate, filtering out 
+    oscillations from J2 and libration.
+
+    Units: Meters, Seconds.
+    """
+    if sma_com is None or len(sma_com) < 2:
+        return {}
+
+    # 1. Linear Regression for Statistical Mean Decay Rate
+    # SMA(t) = intercept + slope * t
+    # Slope is the mean decay rate in m/s.
+    t_clean = t_vals - t_vals[0]
+    n = len(t_clean)
+
+    # Simple Least Squares
+    sum_t = np.sum(t_clean)
+    sum_t2 = np.sum(t_clean**2)
+    sum_s = np.sum(sma_com)
+    sum_ts = np.sum(t_clean * sma_com)
+
+    denom = (n * sum_t2 - sum_t**2)
+    if abs(denom) < 1e-12:
+        slope = 0.0
+    else:
+        slope = (n * sum_ts - sum_t * sum_s) / denom
+
+    # We define decay rate as positive for losing altitude
+    decay_rate_mps = -slope 
+
+    # 2. Key Metrics
+    initial_sma = float(sma_com[0])
+    final_sma = float(sma_com[-1])
+    sma_drop_total = initial_sma - final_sma
+    sim_duration = float(t_vals[-1] - t_vals[0])
+
+    # Orbital Period T = 2 * pi * sqrt(a^3 / mu)
+    # Using initial SMA for period consistency
+    period_init = 2.0 * np.pi * np.sqrt(initial_sma**3 / params.mu)
+    decay_per_orbit_m = decay_rate_mps * period_init
+
+    results = {
+        "com_sma_initial_m": initial_sma,
+        "com_sma_final_m": final_sma,
+        "com_sma_drop_total_m": sma_drop_total,
+        "mean_decay_rate_mps": float(decay_rate_mps),
+        "mean_decay_rate_kmhr": float(decay_rate_mps * 3.6),
+        "mean_decay_rate_kmyear": float(decay_rate_mps * 3.6 * 24 * 365.25),
+        "mean_decay_per_orbit_m": float(decay_per_orbit_m),
+        "initial_orbital_period_s": float(period_init),
+        "simulation_time_s": sim_duration,
+        "total_simulated_time_s": float(t_vals[-1]),
+        "total_compute_time_s": float(total_compute_time)
+    }
+    return results
+
+
 def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com=None, params=None, p_arr=None, is_final=False, silent=False, total_compute_time=0.0):
     """
     Saves simulation parameters and key results to a YAML file for easy reference.
@@ -193,18 +252,7 @@ def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com=None, 
 
     results = {}
     if sma_com is not None:
-        initial_sma = sma_com[0]
-        final_sma = sma_com[-1]
-        sma_drop = initial_sma - final_sma
-
-        results = {
-            "com_sma_initial_m": float(initial_sma),
-            "com_sma_final_m": float(final_sma),
-            "com_sma_drop_m": float(sma_drop),
-            "simulation_time_s": float(t_vals[-1] - t_vals[0]),
-            "total_simulated_time_s": float(t_vals[-1]),
-            "total_compute_time_s": float(total_compute_time)
-        }
+        results = calculate_mission_results(t_vals, sma_com, params, total_compute_time)
 
     # Generate Hashes
     p_hash = "N/A"

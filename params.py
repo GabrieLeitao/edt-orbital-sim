@@ -9,12 +9,12 @@ class SimulationParams:
 
         # 2. System Masses [kg]
         self.m_target = 500.0         # Target satellite mass
-        self.m_sc = 0.5             # Our spacecraft mass
+        self.m_sc = 100            # Our spacecraft mass
         self.m_tip = 2.0             # EDT tip mass (boom/weight)
         self.area_tip = 0.1          # Tip mass drag area [m^2] (10cm x 10cm)
 
         # 3. Tether Properties (Rope: Target-SC)
-        self.L_rope = 25.0            # Nominal rope length [m]
+        self.L_rope = 200.0            # Nominal rope length [m]
         self.E_rope = 100e9           # Young's Modulus (Kevlar) [Pa]
         self.diam_rope = 0.002        # 2mm rope
         
@@ -60,8 +60,15 @@ class SimulationParams:
         # 6. Initial Orbit (LEO)
         self.alt = 800e3              # Altitude [m]
         self.inc = np.radians(51.6)   # Inclination [rad]
-        self.e = 0.001                # Near-circular eccentricity
+        self.e = 0.00                # Near-circular eccentricity
         self.mission_config = 'PERPENDICULAR' # 'PERPENDICULAR' or 'RADIAL'
+
+        # 7. Control Parameters
+        self.control_enable = False    # Enable closed-loop control
+        self.pitch_target = 0.0        # Target libration angle [rad]
+        self.pitch_limit = np.radians(20.0) # Limit for libration angle [rad]
+        self.k_p = 50.0                # Proportional gain [V/rad]
+        self.v_max = 100.0             # Maximum active voltage [V]
 
     @property
     def num_masses(self):
@@ -114,6 +121,13 @@ class SimulationParams:
                 "alt": float(self.alt),
                 "inc_rad": float(self.inc),
                 "e": float(self.e),
+            },
+            "control": {
+                "enable": self.control_enable,
+                "pitch_target": float(self.pitch_target),
+                "pitch_limit": float(self.pitch_limit),
+                "k_p": float(self.k_p),
+                "v_max": float(self.v_max),
             }
         }
 
@@ -191,6 +205,15 @@ class SimulationParams:
         obj.inc = orbit.get("inc_rad", obj.inc) # Note: to_dict maps this to 'inc_rad'
         obj.e = orbit.get("e", obj.e)
 
+        # 8. Control Parameters (Optional for backward compatibility)
+        ctrl = p_dict.get("control")
+        if isinstance(ctrl, dict):
+            obj.control_enable = ctrl.get("enable", obj.control_enable)
+            obj.pitch_target = ctrl.get("pitch_target", obj.pitch_target)
+            obj.pitch_limit = ctrl.get("pitch_limit", obj.pitch_limit)
+            obj.k_p = ctrl.get("k_p", obj.k_p)
+            obj.v_max = ctrl.get("v_max", obj.v_max)
+
         return obj
 
     def to_numba_params(self):
@@ -202,7 +225,8 @@ class SimulationParams:
             self.L_edt, float(self.N_edt), self.m_edt_total,
             self.E_edt, self.diam_edt, self.area_edt, self.beta_edt,
             self.rho_al_res, self.z_plasma, self.r_load, self.r_wire, self.r_total, self.Cd, self.Area_sc,
-            self.area_tip, self.rho_aluminum, self.num_masses
+            self.area_tip, self.rho_aluminum, self.num_masses,
+            1.0 if self.control_enable else 0.0, self.pitch_target, self.pitch_limit, self.k_p, self.v_max
         ], dtype=np.float64)
 
 # Indices for the flat array
@@ -234,7 +258,12 @@ IDX_AREA_SC = 24
 IDX_AREA_TIP = 25
 IDX_RHO_AL = 26
 IDX_NUM_MASSES = 27
+IDX_CONTROL_ENABLE = 28
+IDX_PITCH_TARGET = 29
+IDX_PITCH_LIMIT = 30
+IDX_K_P = 31
+IDX_V_MAX = 32
 
 # Integrator-only indices (added to the end of the flat array in engine.py)
-IDX_PROGRESS = 28
-IDX_ABORT = 29
+IDX_PROGRESS = 33
+IDX_ABORT = 34

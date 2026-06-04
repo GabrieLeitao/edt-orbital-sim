@@ -20,10 +20,8 @@ from dynamics import tether_dynamics_fast
 
 
 # Length of the flat parameter array from SimulationParams.to_numba_params().
-# Increased to 30 to include:
-# - IDX_PROGRESS = 28
-# - IDX_ABORT = 29
-P_ARR_LEN = 30
+# Increased to 40 to include control parameters and progress/abort flags.
+P_ARR_LEN = 40
 
 
 # ---------------------------------------------------------------------------

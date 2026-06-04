@@ -66,6 +66,69 @@ def smooth_tension(dl, dl_dot, k, beta):
     return max(0.0, tension)
 
 @njit(fastmath=True, nogil=True)
+def get_libration_angle_fast(pos, p_arr):
+    """
+    Calculates the current libration angle (angle from local vertical).
+    """
+    num_masses = int(p_arr[p.IDX_NUM_MASSES])
+    n_edt = int(p_arr[p.IDX_N_EDT])
+    
+    # 1. Calculate Center of Mass
+    r_com = np.zeros(3)
+    total_m = 0.0
+    for i in range(num_masses):
+        m = get_mass_fast(i, p_arr, num_masses)
+        r_com += m * pos[i]
+        total_m += m
+    r_com /= total_m
+    
+    # 2. Local Vertical Unit Vector
+    u_v = r_com / np.linalg.norm(r_com)
+    
+    # 3. Tether Axis Unit Vector (Tip to Target)
+    r_tether = pos[n_edt + 1] - pos[0]
+    u_t = r_tether / np.linalg.norm(r_tether)
+    
+    # 4. Angle calculation
+    cos_theta = np.dot(u_v, u_t)
+    
+    # Manual clip for Numba compatibility with scalars
+    if cos_theta > 1.0:
+        cos_theta = 1.0
+    elif cos_theta < -1.0:
+        cos_theta = -1.0
+        
+    return np.arccos(cos_theta)
+
+@njit(fastmath=True, nogil=True)
+def get_controlled_current(v_total_emf, pos, p_arr):
+    """
+    Implements closed-loop current control to limit libration.
+    """
+    if p_arr[p.IDX_CONTROL_ENABLE] < 0.5:
+        return v_total_emf / p_arr[p.IDX_R_TOTAL]
+
+    theta = get_libration_angle_fast(pos, p_arr)
+    theta_limit = p_arr[p.IDX_PITCH_LIMIT]
+    k_p = p_arr[p.IDX_K_P]
+    v_max = p_arr[p.IDX_V_MAX]
+
+    # Active Control Logic: 
+    # If the libration angle exceeds the limit, we apply an active voltage 
+    # to counteract the current that is driving the libration.
+    v_active = 0.0
+    if theta > theta_limit:
+        # P-control on the active voltage to 'quench' the current
+        # We try to drive the current to 0 (or reverse it) to stop the torque
+        error = theta - theta_limit
+        v_active = -k_p * error * np.sign(v_total_emf)
+    
+    # Clamp active voltage
+    v_active = max(-v_max, min(v_max, v_active))
+    
+    return (v_total_emf + v_active) / p_arr[p.IDX_R_TOTAL]
+
+@njit(fastmath=True, nogil=True)
 def tether_dynamics_fast(t, X, p_arr):
     """
     Numba-JIT optimized core dynamics.
@@ -157,7 +220,7 @@ def tether_dynamics_fast(t, X, p_arr):
         b_fields[j] = b_vec
         v_total_emf += np.dot(np.cross(v_mid, b_vec), r_seg)
         
-    i_dynamic = v_total_emf / p_arr[p.IDX_R_TOTAL]
+    i_dynamic = get_controlled_current(v_total_emf, pos, p_arr)
     
     # PASS 2: Apply Tension and Lorentz Forces
     for j in range(n_edt):
@@ -258,7 +321,7 @@ def compute_physics_metrics(t, X, p_arr):
         b_vec, _ = get_environment_optimized(r_mid, v_mid, t, p_arr, cos_tg, sin_tg)
         v_total_emf += np.dot(np.cross(v_mid, b_vec), r_seg)
         
-    i_dynamic = v_total_emf / p_arr[p.IDX_R_TOTAL]
+    i_dynamic = get_controlled_current(v_total_emf, pos, p_arr)
     
     for j in range(n_edt):
         p_a, p_b = pos[j], pos[j+1]
