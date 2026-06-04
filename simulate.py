@@ -177,7 +177,7 @@ def initialize_new_mission(t_end, sampling_hz):
 def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
     # 0. Constants
     sampling_hz = 1.0
-    t_end = 5400 * 2 # 2 orbits
+    t_end = 5400 * 4 # 2 orbits
     step_size = 1000.0
 
     # 1. Setup Phase

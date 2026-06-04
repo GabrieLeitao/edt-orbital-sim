@@ -73,7 +73,7 @@ def tether_dynamics_fast(t, X, p_arr):
     p_arr: Flat parameter array
     """
     n_edt = int(p_arr[p.IDX_N_EDT])
-    num_masses = 2 + n_edt
+    num_masses = int(p_arr[p.IDX_NUM_MASSES])
     dX = np.zeros_like(X)
     
     # Extract positions and velocities
@@ -209,7 +209,7 @@ def compute_physics_metrics(t, X, p_arr):
     Optimized physical metrics calculation.
     """
     n_edt = int(p_arr[p.IDX_N_EDT])
-    num_masses = 2 + n_edt
+    num_masses = int(p_arr[p.IDX_NUM_MASSES])
     
     X_pos_slice = np.ascontiguousarray(X[:3*num_masses])
     pos = X_pos_slice.reshape((num_masses, 3))

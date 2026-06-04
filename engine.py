@@ -7,6 +7,7 @@ from frames import get_rotation_matrix_eci
 from integrators import rk45_dopri_integrate, velocity_verlet_integrate, lsoda_integrate, IntegratorSolution
 from dynamics import tether_dynamics_fast
 from scipy.integrate import solve_ivp
+import params as p
 
 def setup_initial_state(params):
     """
@@ -170,19 +171,19 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
     Y_out = np.empty((n_total, n_state))
     Y_out[0] = X0
 
-    # Setup shared progress pointer (Slot 27) and Abort Flag (Slot 28)
-    # We use a 29-element array to match integrators.P_ARR_LEN
-    p_arr_ext = np.zeros(29)
+    # Setup shared progress pointer and Abort Flag
+    # We use a 30-element array to match integrators.P_ARR_LEN
+    p_arr_ext = np.zeros(len(p_arr) + 2)
     p_arr_ext[:len(p_arr)] = p_arr
-    p_arr_ext[27] = t0
-    p_arr_ext[28] = 0.0 # Abort flag
+    p_arr_ext[p.IDX_PROGRESS] = t0
+    p_arr_ext[p.IDX_ABORT] = 0.0 # Abort flag
     
     # Progress Monitor Thread
     stop_event = threading.Event()
     def monitor():
         last_reported_t = t0
         while not stop_event.is_set():
-            curr_t = p_arr_ext[27]
+            curr_t = p_arr_ext[p.IDX_PROGRESS]
             dt = int(curr_t - last_reported_t)
             if dt > 0 and pbar is not None:
                 pbar.update(dt)
@@ -193,14 +194,15 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
     if pbar is not None:
         monitor_thread.start()
 
-    # Integrator Thread
+    # Integrator Thread — capture any exception so the main thread can re-raise it.
+    integrator_exc = []
     def run_integrator():
         try:
             y = X0.astype(np.float64).copy()
             if method_u == 'RK45':
-                rk45_dopri_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out, p_arr_ext[27:28])
+                rk45_dopri_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out, p_arr_ext[p.IDX_PROGRESS : p.IDX_PROGRESS + 1])
             elif method_u == 'VERLET':
-                velocity_verlet_integrate(t0, tf, y, p_arr_ext, t_eval, Y_out, p_arr_ext[27:28])
+                velocity_verlet_integrate(t0, tf, y, p_arr_ext, t_eval, Y_out, p_arr_ext[p.IDX_PROGRESS : p.IDX_PROGRESS + 1])
             elif method_u == 'LSODA':
                 lsoda_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out)
             elif method_u == 'RADAU':
@@ -209,9 +211,8 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
                 Y_out[:] = sol.y.T
             else:
                 raise ValueError(f"Unknown method '{method}'. Use 'RK45', 'VERLET' or 'LSODA'.")
-        except Exception as e:
-            # Propagate error if needed, but here we just want it to finish
-            pass
+        except BaseException as e:
+            integrator_exc.append(e)
 
     it_thread = threading.Thread(target=run_integrator, daemon=True)
     it_thread.start()
@@ -222,7 +223,7 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
             it_thread.join(timeout=0.2)
     except KeyboardInterrupt:
         print("\nInterrupt received. Stopping simulation gracefully...")
-        p_arr_ext[28] = 1.0 # Signal Numba to abort
+        p_arr_ext[p.IDX_ABORT] = 1.0 # Signal Numba to abort
         it_thread.join()
         raise
     finally:
@@ -233,6 +234,9 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
             if pbar is not None:
                 remaining = int(p_arr_ext[27] - t0) # Progress made
                 # pbar.update is incremental, so we just finish the bar if complete
-                pass 
+                pass
+
+    if integrator_exc:
+        raise integrator_exc[0]
 
     return IntegratorSolution(t=t_eval, y=Y_out.T)

@@ -9,12 +9,12 @@ class SimulationParams:
 
         # 2. System Masses [kg]
         self.m_target = 500.0         # Target satellite mass
-        self.m_sc = 100.0             # Our spacecraft mass
+        self.m_sc = 0.5             # Our spacecraft mass
         self.m_tip = 2.0             # EDT tip mass (boom/weight)
         self.area_tip = 0.1          # Tip mass drag area [m^2] (10cm x 10cm)
 
         # 3. Tether Properties (Rope: Target-SC)
-        self.L_rope = 10.0            # Nominal rope length [m]
+        self.L_rope = 25.0            # Nominal rope length [m]
         self.E_rope = 100e9           # Young's Modulus (Kevlar) [Pa]
         self.diam_rope = 0.002        # 2mm rope
         
@@ -27,7 +27,7 @@ class SimulationParams:
         self.beta_rope = 2.0 * 0.5 / w_rope
 
         # 4. EDT Properties (SC-Tip)
-        self.L_edt = 200.0            # Total EDT length [m]
+        self.L_edt = 1000.0            # Total EDT length [m]
         self.N_edt = 5               # Number of segments
         self.E_edt = 70e9             # Young's Modulus (Aluminum) [Pa]
 
@@ -202,7 +202,7 @@ class SimulationParams:
             self.L_edt, float(self.N_edt), self.m_edt_total,
             self.E_edt, self.diam_edt, self.area_edt, self.beta_edt,
             self.rho_al_res, self.z_plasma, self.r_load, self.r_wire, self.r_total, self.Cd, self.Area_sc,
-            self.area_tip, self.rho_aluminum
+            self.area_tip, self.rho_aluminum, self.num_masses
         ], dtype=np.float64)
 
 # Indices for the flat array
@@ -233,3 +233,8 @@ IDX_CD = 23
 IDX_AREA_SC = 24
 IDX_AREA_TIP = 25
 IDX_RHO_AL = 26
+IDX_NUM_MASSES = 27
+
+# Integrator-only indices (added to the end of the flat array in engine.py)
+IDX_PROGRESS = 28
+IDX_ABORT = 29
