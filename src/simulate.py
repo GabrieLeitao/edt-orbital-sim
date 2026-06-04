@@ -14,12 +14,13 @@ from engine import setup_initial_state, integrate_system, save_checkpoint, load_
 from analysis import (calculate_com_sma, save_csv, save_config_params_results_yaml, 
                       post_process_telemetry, calculate_mission_results)
 from utils import get_results_folder
+from frames import eci_to_lvlh
 
 from stability import run_preflight_stability_check, check_state_sanity
 
 def plot_simulation(t_vals, sma_com, X_vals, params, run_folder):
     """Generate deorbiting plots"""
-    plt.figure(figsize=(14, 6))
+    fig = plt.figure(figsize=(14, 6))
     
     # 1. SMA Plot
     plt.subplot(1, 2, 1)
@@ -42,14 +43,43 @@ def plot_simulation(t_vals, sma_com, X_vals, params, run_folder):
     plt.legend()
     
     # 2. Tether Configuration
-    plt.subplot(1, 2, 2)
+    ax_edt = fig.add_subplot(1, 2, 2)
+
     final_pos = X_vals[-1, :3*params.num_masses].reshape((params.num_masses, 3))
-    rel_pos = final_pos - final_pos[params.N_edt + 1]
-    plt.plot(rel_pos[:, 1], rel_pos[:, 0], '-ok')
-    plt.gca().set_aspect('equal'); plt.grid(True)
-    plt.title('Final Tether Configuration')
-    plt.xlabel('In-Track Distance [m]')
-    plt.ylabel('Radial Distance [m]')
+    final_vel = X_vals[-1, 3*params.num_masses:].reshape((params.num_masses, 3))
+
+    r_ref = final_pos[params.N_edt + 1]
+    v_ref = final_vel[params.N_edt + 1]
+
+    r_lvlh = eci_to_lvlh(final_pos, v_ref, r_ref)
+
+    it = r_lvlh[:, 0]
+    ct = r_lvlh[:, 1]
+    rd = r_lvlh[:, 2]
+
+    plt.plot(it, rd, '-ok')
+
+    target_idx = params.num_masses - 1
+    sc_idx = params.num_masses - 2
+    tip_idx = 0
+
+    ax_edt.set_title("Final Tether Configuration")
+    ax_edt.set_xlabel("In-Track [m]")
+    ax_edt.set_ylabel("Radial [m]")
+    ax_edt.grid(True)
+
+    line_edt_full, = ax_edt.plot([], [], 'g-', lw=1.5, alpha=0.8)
+    marker_tip_edt, = ax_edt.plot([], [], 'mo', markersize=5, label="Tip")
+    marker_sc_edt, = ax_edt.plot([], [], 'bo', markersize=5, label="SC")
+    marker_target_edt, = ax_edt.plot([], [], 'rs', markersize=7, label="Target")
+    # 4. EDT Behavior View
+    line_edt_full.set_data(it, rd)
+    marker_tip_edt.set_data([it[tip_idx]], [rd[tip_idx]])
+    marker_sc_edt.set_data([it[sc_idx]], [rd[sc_idx]])
+    marker_target_edt.set_data([it[target_idx]], [rd[target_idx]])
+    zoomed_limit_edt = params.L_edt * 1.4
+    ax_edt.set_xlim([-zoomed_limit_edt, zoomed_limit_edt])
+    ax_edt.set_ylim([zoomed_limit_edt, -zoomed_limit_edt])
     
     plt.tight_layout()
     plt.savefig(os.path.join(run_folder, "simulation_plots.png"))
@@ -201,7 +231,7 @@ def initialize_new_mission(t_end, sampling_hz):
 def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
     # 0. Constants
     sampling_hz = 1.0
-    t_end = 5400 * 4 # 2 orbits
+    t_end = 24 * 100 # 1 day
     step_size = 100000.0
 
     # 1. Setup Phase
