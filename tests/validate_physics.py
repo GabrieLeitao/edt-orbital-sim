@@ -1,7 +1,11 @@
 import matplotlib.pyplot as plt
 import os
+import sys
 import numpy as np
 from tqdm import tqdm
+
+# Add src to path for imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
 from params import SimulationParams
 from engine import setup_initial_state, integrate_system

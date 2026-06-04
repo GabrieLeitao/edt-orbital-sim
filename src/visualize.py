@@ -5,6 +5,7 @@ from matplotlib.widgets import Slider, Button
 from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d import Axes3D
 import os
+import sys
 import signal
 from frames import eci_to_lvlh
 import yaml

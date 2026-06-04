@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import os
+import sys
 import numpy as np
 import pandas as pd
 import questionary
@@ -91,10 +92,14 @@ def handle_mission_resumption(t_end, sampling_hz):
         return None, 0.0, None, None, None, None, 0, 0.0
 
     use_checkpoint = questionary.confirm("Found resumable runs. Would you like to resume?").ask()
+    if use_checkpoint is None:
+        sys.exit(0)
     if not use_checkpoint:
         return None, 0.0, None, None, None, None, 0, 0.0
 
     run_name = questionary.select("Select run to resume:", choices=resumable_runs).ask()
+    if run_name is None:
+        sys.exit(0)
     run_folder = os.path.join('results', run_name)
     
     yaml_path = os.path.join(run_folder, "config_params_results.yaml")
@@ -147,10 +152,14 @@ def initialize_new_mission(t_end, sampling_hz):
             {"name": "Radial (All components radially aligned)", "value": "RADIAL"}
         ]
     ).ask()
+    if config is None:
+        sys.exit(0)
     params.mission_config = config
     
     # 8. Control Setup
     control_enable = questionary.confirm("Enable Closed-Loop Libration Control?").ask()
+    if control_enable is None:
+        sys.exit(0)
     params.control_enable = control_enable
     if control_enable:
         limit_deg = questionary.text("Libration Angle Limit [deg]:", default="20.0").ask()
@@ -188,7 +197,7 @@ def initialize_new_mission(t_end, sampling_hz):
 def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
     # 0. Constants
     sampling_hz = 1.0
-    t_end = 5400 * 2 # 2 orbits
+    t_end = 5400 * 4 # 2 orbits
     step_size = 100000.0
 
     # 1. Setup Phase
@@ -275,8 +284,7 @@ def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
         print(f"--- Statistical Mission Results ---")
         print(f"Total SMA Drop (Raw): {res['com_sma_drop_total_m']/1000.0:.3f} km")
         print(f"Mean Decay Rate: {res['mean_decay_rate_mps']:.4f} m/s ({res['mean_decay_rate_kmhr']:.4f} km/hr)")
-        print(f"Projected Decay: {res['mean_decay_per_orbit_m']:.3f} m/orbit and {res['mean_decay_rate_kmyear']:.2f} km/year")
-        print(f"Projected Decay: {res['mean_decay_rate_kmyear']:.2f} km/year")
+        print(f"Projected Decay: {res['mean_decay_per_orbit_m']:.3f} m/orbit == {res['mean_decay_rate_kmyear']:.2f} km/year")
 
     save_config_params_results_yaml("config_params_results.yaml", rf, final_t, sma_final, params, p_arr, is_final=True, total_compute_time=total_compute_time)
     plot_simulation(final_t, sma_final, final_X, params, rf)

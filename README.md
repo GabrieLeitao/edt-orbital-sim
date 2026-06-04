@@ -57,12 +57,17 @@ Two compiled integrators live in `integrators.py`; both keep the integration loo
 `engine.py:integrate_system` dispatches on the `method=` argument and sub-chunks the span so tqdm ticks roughly every 100 s of simulated time without breaking the compiled loop. Checkpoint state is signaled via `pbar.set_postfix_str(...)` on the same shared bar.
 
 ## File Structure
-- `params.py`: Configuration for material properties (Young's Modulus, damping constants) and system masses.
-- `dynamics.py`: Core physics engine with Rayleigh damping, smooth-slack logic, and J2/Drag/Lorentz forces.
-- `engine.py`: Initialization kernel (Stable Gravity-Gradient configuration) and ODE driver.
-- `analysis.py`: Telemetry engine for SMA decay, energy conservation, and libration analysis.
-- `visualize.py`: Interactive 2x2 dashboard with ECI, Relative In-Plane (In-Track vs Radial), and LVLH 3D views.
-- `stability.py`: Runs preflight stress test to check margins and if method is stable.
+- `src/`: Core source code for the simulation.
+    - `params.py`: Configuration for material properties (Young's Modulus, damping constants) and system masses.
+    - `dynamics.py`: Core physics engine with Rayleigh damping, smooth-slack logic, and J2/Drag/Lorentz forces.
+    - `engine.py`: Initialization kernel (Stable Gravity-Gradient configuration) and ODE driver.
+    - `analysis.py`: Telemetry engine for SMA decay, energy conservation, and libration analysis.
+    - `visualize.py`: Interactive 2x2 dashboard with ECI, Relative In-Plane (In-Track vs Radial), and LVLH 3D views.
+    - `stability.py`: Runs preflight stress test to check margins and if method is stable.
+    - `simulate.py`: Main entry point for running missions.
+- `tests/`: Validation and test scripts.
+    - `validate_physics.py`: Checks structural integrity and energy conservation in a conservative scenario.
+    - `convergence_test.py`: Numerical convergence analysis.
 
 ## Building and Running
 
@@ -74,37 +79,38 @@ pip install -r requirements.txt
 Note: using a virtual environment is recommended, with e.g.:
 ```bash
 python3 -m venv .venv
+source .venv/bin/activate
 ```
 
 1. **Validate Physics**:
    ```bash
-   python validate_physics.py
+   python tests/validate_physics.py
    ```
    *Checks structural integrity and energy conservation in a conservative scenario.*
 2. **Run Mission**:
    ```bash
-   python simulate.py
+   python src/simulate.py
    ```
    *Propagates the full deorbiting mission with active Lorentz forces and drag. Supports periodic binary checkpointing for lossless resume.*
 
    **No checkpoint:**
    To skip periodic checkpointing and intermediate CSV saves, use:
    ```bash
-   python simulate.py --no-checkpoint
+   python src/simulate.py --no-checkpoint
    ```
    **No preflight stress test:**
    To skip preflight stress validation test for material stability, use:
    ```bash
-   python simulate.py --no-test
+   python src/simulate.py --no-test
    ```
    **Select integrator:**
    ```bash
-   python simulate.py --method RK45    # Numba Dormand-Prince 5(4), default
-   python simulate.py --method LSODA   # numbalsoda LSODA (implicit, for stiff regimes)
+   python src/simulate.py --method RK45    # Numba Dormand-Prince 5(4), default
+   python src/simulate.py --method LSODA   # numbalsoda LSODA (implicit, for stiff regimes)
    ```
 3. **Visualize**:
    ```bash
-   python visualize.py
+   python src/visualize.py
    ```
    *Interactive scrubbing with inverted Radial axis (Down = Earth) for standard physics interpretation.*
 

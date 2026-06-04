@@ -14,7 +14,7 @@ class SimulationParams:
         self.area_tip = 0.1          # Tip mass drag area [m^2] (10cm x 10cm)
 
         # 3. Tether Properties (Rope: Target-SC)
-        self.L_rope = 200.0            # Nominal rope length [m]
+        self.L_rope = 100.0            # Nominal rope length [m]
         self.E_rope = 100e9           # Young's Modulus (Kevlar) [Pa]
         self.diam_rope = 0.002        # 2mm rope
         
@@ -27,7 +27,7 @@ class SimulationParams:
         self.beta_rope = 2.0 * 0.5 / w_rope
 
         # 4. EDT Properties (SC-Tip)
-        self.L_edt = 1000.0            # Total EDT length [m]
+        self.L_edt = 500.0            # Total EDT length [m]
         self.N_edt = 5               # Number of segments
         self.E_edt = 70e9             # Young's Modulus (Aluminum) [Pa]
 

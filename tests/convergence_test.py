@@ -1,7 +1,13 @@
 import numpy as np
 import time
 import matplotlib.pyplot as plt
+import os
+import sys
 from tqdm import tqdm
+
+# Add src to path for imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+
 from params import SimulationParams
 from engine import setup_initial_state, integrate_system
 from analysis import calculate_com_sma
