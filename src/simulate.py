@@ -45,11 +45,11 @@ def plot_simulation(t_vals, sma_com, X_vals, params, run_folder):
     plt.subplot(1, 2, 2)
     final_pos = X_vals[-1, :3*params.num_masses].reshape((params.num_masses, 3))
     rel_pos = final_pos - final_pos[params.N_edt + 1]
-    plt.plot(rel_pos[:, 0], rel_pos[:, 1], '-ok')
+    plt.plot(rel_pos[:, 1], rel_pos[:, 0], '-ok')
     plt.gca().set_aspect('equal'); plt.grid(True)
     plt.title('Final Tether Configuration')
-    plt.xlabel('Radial Distance [m]')
-    plt.ylabel('In-Track Distance [m]')
+    plt.xlabel('In-Track Distance [m]')
+    plt.ylabel('Radial Distance [m]')
     
     plt.tight_layout()
     plt.savefig(os.path.join(run_folder, "simulation_plots.png"))
@@ -148,8 +148,8 @@ def initialize_new_mission(t_end, sampling_hz):
     config = questionary.select(
         "Select Mission Configuration:",
         choices=[
-            {"name": "Perpendicular (SC/Target in-track, EDT radial)", "value": "PERPENDICULAR"},
-            {"name": "Radial (All components radially aligned)", "value": "RADIAL"}
+            {"name": "Radial (All components radially aligned)", "value": "RADIAL"},
+            {"name": "Perpendicular (SC/Target in-track, EDT radial)", "value": "PERPENDICULAR"}
         ]
     ).ask()
     if config is None:
@@ -163,9 +163,13 @@ def initialize_new_mission(t_end, sampling_hz):
     params.control_enable = control_enable
     if control_enable:
         limit_deg = questionary.text("Libration Angle Limit [deg]:", default="20.0").ask()
+        if limit_deg is None:
+            sys.exit(0)
         params.pitch_limit = np.radians(float(limit_deg))
         
         kp = questionary.text("Control Gain Kp [V/rad]:", default="50.0").ask()
+        if kp is None:
+            sys.exit(0)
         params.k_p = float(kp)
 
     X0 = setup_initial_state(params)

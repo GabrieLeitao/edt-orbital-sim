@@ -53,6 +53,7 @@ Two compiled integrators live in `integrators.py`; both keep the integration loo
 
 - **`RK45`** (default): Adaptive Dormand-Prince 5(4) implemented in pure `@njit`, with FSAL and cubic-Hermite dense output. Best for the smooth-orbit regime — roughly 2× faster than the previous scipy RK45 path.
 - **`LSODA`**: numbalsoda's compiled LSODA, called via a `@cfunc` RHS adapter. Implicit BDF for the stiff aluminum EDT modes. Currently uses LSODA's internal numerical Jacobian — slower than RK45 on this problem until an analytic Jacobian is plumbed through.
+- **`VERLET`**: numba compiled Fixed-step Velocity Verlet integrator of order 2
 
 `engine.py:integrate_system` dispatches on the `method=` argument and sub-chunks the span so tqdm ticks roughly every 100 s of simulated time without breaking the compiled loop. Checkpoint state is signaled via `pbar.set_postfix_str(...)` on the same shared bar.
 

@@ -59,7 +59,7 @@ class SimulationParams:
 
         # 6. Initial Orbit (LEO)
         self.alt = 800e3              # Altitude [m]
-        self.inc = np.radians(51.6)   # Inclination [rad]
+        self.inc = np.radians(87)   # Inclination [rad]
         self.e = 0.00                # Near-circular eccentricity
         self.mission_config = 'PERPENDICULAR' # 'PERPENDICULAR' or 'RADIAL'
 
