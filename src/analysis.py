@@ -80,7 +80,7 @@ def calculate_com_sma(t_vals, X_vals, p_arr, params):
     sma_com = -params.mu / (2.0 * energy_com)
     return sma_com
 
-def post_process_telemetry(t_vals, X_vals, p_arr, params, include_sma=True):
+def post_process_telemetry(t_vals, X_vals, p_arr, params, include_sma=True, sma_array=None):
     """
     Extracts high-fidelity physical metrics from the integrated state vector.
     
@@ -106,7 +106,10 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params, include_sma=True):
     
     sma = np.zeros(count)
     if include_sma:
-        sma = calculate_com_sma(t_vals, X_vals, p_arr, params)
+        if sma_array is not None:
+            sma = sma_array
+        else:
+            sma = calculate_com_sma(t_vals, X_vals, p_arr, params)
 
     idx_sc = params.N_edt
     idx_target = params.N_edt + 1

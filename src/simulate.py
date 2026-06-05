@@ -231,7 +231,7 @@ def initialize_new_mission(t_end, sampling_hz):
 def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
     # 0. Constants
     sampling_hz = 1.0
-    t_end = 24 * 100 # 1 day
+    t_end = 24 * 60 * 60 # 1 day
     step_size = 100000.0
 
     # 1. Setup Phase
@@ -319,6 +319,11 @@ def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
         print(f"Total SMA Drop (Raw): {res['com_sma_drop_total_m']/1000.0:.3f} km")
         print(f"Mean Decay Rate: {res['mean_decay_rate_mps']:.4f} m/s ({res['mean_decay_rate_kmhr']:.4f} km/hr)")
         print(f"Projected Decay: {res['mean_decay_per_orbit_m']:.3f} m/orbit == {res['mean_decay_rate_kmyear']:.2f} km/year")
+
+    # Final Save Phase
+    print("Saving final telemetry to CSV...")
+    telemetry_final = post_process_telemetry(final_t, final_X, p_arr, params, include_sma=True, sma_array=sma_final)
+    save_csv("simulation_results.csv", rf, final_t, telemetry_final, final_X, params)
 
     save_config_params_results_yaml("config_params_results.yaml", rf, final_t, sma_final, params, p_arr, is_final=True, total_compute_time=total_compute_time)
     plot_simulation(final_t, sma_final, final_X, params, rf)
