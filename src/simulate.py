@@ -291,9 +291,17 @@ def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
                 save_checkpoint(rf, t_curr, X_curr, p_arr, current_idx=curr_idx, total_compute_time=total_comp)
                 
                 # Silent CSV update (append only the new segment)
-                # Performance: include_sma=False avoids expensive orbital calculations mid-loop
-                tel_seg = post_process_telemetry(sol.t, sol.y.T, p_arr, params, include_sma=False)
-                save_csv("simulation_results.csv", rf, sol.t, tel_seg, sol.y.T, params, silent=True, append=True)
+                # Skip the first point of the segment to avoid duplicates in CSV,
+                # unless it's the very first segment of the whole mission.
+                is_first_seg = (t_curr == 0.0 and not os.path.exists(os.path.join(rf, "simulation_results.csv")))
+                if is_first_seg:
+                    t_app, y_app = sol.t, sol.y.T
+                else:
+                    t_app, y_app = sol.t[1:], sol.y.T[1:]
+                
+                if len(t_app) > 0:
+                    tel_seg = post_process_telemetry(t_app, y_app, p_arr, params, include_sma=True)
+                    save_csv("simulation_results.csv", rf, t_app, tel_seg, y_app, params, silent=True, append=True)
                 pbar.set_postfix_str("")
 
     # 4. Finalization Phase
@@ -320,10 +328,11 @@ def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
         print(f"Mean Decay Rate: {res['mean_decay_rate_mps']:.4f} m/s ({res['mean_decay_rate_kmhr']:.4f} km/hr)")
         print(f"Projected Decay: {res['mean_decay_per_orbit_m']:.3f} m/orbit == {res['mean_decay_rate_kmyear']:.2f} km/year")
 
-    # Final Save Phase
-    print("Saving final telemetry to CSV...")
-    telemetry_final = post_process_telemetry(final_t, final_X, p_arr, params, include_sma=True, sma_array=sma_final)
-    save_csv("simulation_results.csv", rf, final_t, telemetry_final, final_X, params)
+    # Final Save Phase (Only if not already saved via checkpoints)
+    if skip_checkpoint:
+        print("Saving final telemetry to CSV...")
+        telemetry_final = post_process_telemetry(final_t, final_X, p_arr, params, include_sma=True, sma_array=sma_final)
+        save_csv("simulation_results.csv", rf, final_t, telemetry_final, final_X, params)
 
     save_config_params_results_yaml("config_params_results.yaml", rf, final_t, sma_final, params, p_arr, is_final=True, total_compute_time=total_compute_time)
     plot_simulation(final_t, sma_final, final_X, params, rf)
