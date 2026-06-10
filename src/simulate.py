@@ -7,6 +7,7 @@ import questionary
 import hashlib
 import time
 import argparse
+import uuid
 from tqdm import tqdm
 
 from params import SimulationParams
@@ -48,31 +49,34 @@ def plot_simulation(t_vals, sma_com, X_vals, params, run_folder):
     final_pos = X_vals[-1, :3*params.num_masses].reshape((params.num_masses, 3))
     final_vel = X_vals[-1, 3*params.num_masses:].reshape((params.num_masses, 3))
 
-    r_ref = final_pos[params.N_edt + 1]
-    v_ref = final_vel[params.N_edt + 1]
+    if params.system_config == 'SC_EDT_TARGET':
+        target_idx = params.N_edt
+        sc_idx = 0
+        tip_idx = 0
+    else:
+        target_idx = params.N_edt + 1
+        sc_idx = params.N_edt
+        tip_idx = 0
 
+    r_ref = final_pos[target_idx]
+    v_ref = final_vel[target_idx]
     r_lvlh = eci_to_lvlh(final_pos, v_ref, r_ref)
 
     it = r_lvlh[:, 0]
-    ct = r_lvlh[:, 1]
     rd = r_lvlh[:, 2]
 
     plt.plot(it, rd, '-ok')
 
-    target_idx = params.num_masses - 1
-    sc_idx = params.num_masses - 2
-    tip_idx = 0
-
-    ax_edt.set_title("Final Tether Configuration")
+    ax_edt.set_title(f"Final Tether Configuration ({params.system_config})")
     ax_edt.set_xlabel("In-Track [m]")
     ax_edt.set_ylabel("Radial [m]")
     ax_edt.grid(True)
 
     line_edt_full, = ax_edt.plot([], [], 'g-', lw=1.5, alpha=0.8)
-    marker_tip_edt, = ax_edt.plot([], [], 'mo', markersize=5, label="Tip")
+    marker_tip_edt, = ax_edt.plot([], [], 'mo', markersize=5, label="Tip/SC")
     marker_sc_edt, = ax_edt.plot([], [], 'bo', markersize=5, label="SC")
     marker_target_edt, = ax_edt.plot([], [], 'rs', markersize=7, label="Target")
-    # 4. EDT Behavior View
+    
     line_edt_full.set_data(it, rd)
     marker_tip_edt.set_data([it[tip_idx]], [rd[tip_idx]])
     marker_sc_edt.set_data([it[sc_idx]], [rd[sc_idx]])
@@ -83,7 +87,7 @@ def plot_simulation(t_vals, sma_com, X_vals, params, run_folder):
     
     plt.tight_layout()
     plt.savefig(os.path.join(run_folder, "simulation_plots.png"))
-    plt.show()
+    # plt.show()
 
 def find_resumable_runs():
     """Finds folders in results/ that have a checkpoint.npz"""
@@ -115,16 +119,14 @@ def recover_history_from_csv(run_folder, params):
     all_X = np.hstack([pos_rec, vel_rec])
     return all_t, all_X
 
-def handle_mission_resumption(t_end, sampling_hz):
+def handle_mission_resumption(t_end, sampling_hz, args=None):
     """Manages the logic for resuming an interrupted simulation using memmaps."""
+    if not (args and args.resume):
+        return None, 0.0, None, None, None, None, 0, 0.0
+        
     resumable_runs = find_resumable_runs()
     if not resumable_runs:
-        return None, 0.0, None, None, None, None, 0, 0.0
-
-    use_checkpoint = questionary.confirm("Found resumable runs. Would you like to resume?").ask()
-    if use_checkpoint is None:
-        sys.exit(0)
-    if not use_checkpoint:
+        print("No resumable runs found.")
         return None, 0.0, None, None, None, None, 0, 0.0
 
     run_name = questionary.select("Select run to resume:", choices=resumable_runs).ask()
@@ -170,41 +172,74 @@ def handle_mission_resumption(t_end, sampling_hz):
     print(f"Resuming mission from t = {t_s:.1f}s (Index {curr_idx})")
     return run_folder, t_s, X0, params, hist_t, hist_X, curr_idx, total_comp
 
-def initialize_new_mission(t_end, sampling_hz):
+def initialize_new_mission(t_end, sampling_hz, args=None):
     """Sets up a fresh simulation run with pre-allocated memmaps."""
     params = SimulationParams()
     
-    # Allow user to choose mission configuration
-    config = questionary.select(
-        "Select Mission Configuration:",
-        choices=[
-            {"name": "Radial (All components radially aligned)", "value": "RADIAL"},
-            {"name": "Perpendicular (SC/Target in-track, EDT radial)", "value": "PERPENDICULAR"}
-        ]
-    ).ask()
-    if config is None:
-        sys.exit(0)
-    params.mission_config = config
+    # 1. Select System Configuration
+    if args and args.system_config:
+        params.system_config = args.system_config
+    else:
+        sys_config = questionary.select(
+            "Select System Topology:",
+            choices=[
+                {"name": "SC-EDT-Target (New proposal: Spacecraft linked to Target via EDT)", "value": "SC_EDT_TARGET"},
+                {"name": "Tip-EDT-SC-Rope-Target (Legacy: Tip-EDT-SC with rope to Target)", "value": "SC_ROPE_EDT_TARGET"}
+            ]
+        ).ask()
+        if sys_config is None: sys.exit(0)
+        params.system_config = sys_config
+
+    # 2. Select Mission Configuration (Initial State)
+    if args and args.mission_config:
+        params.mission_config = args.mission_config
+    else:
+        if params.system_config == 'SC_EDT_TARGET':
+            alignment_choices = [
+                {"name": "Radial (SC-EDT-Target aligned along local vertical)", "value": "RADIAL"},
+                {"name": "Full In-Track (SC-EDT-Target laid along the velocity direction)", "value": "FULL_IN_TRACK"}
+            ]
+        else:
+            alignment_choices = [
+                {"name": "Radial (All components radially aligned)", "value": "RADIAL"},
+                {"name": "Perpendicular (SC/Target in-track, EDT radial)", "value": "PERPENDICULAR"}
+            ]
+
+        config = questionary.select(
+            "Select Initial Alignment:",
+            choices=alignment_choices
+        ).ask()
+        if config is None: sys.exit(0)
+        params.mission_config = config
     
-    # 8. Control Setup
-    control_enable = questionary.confirm("Enable Closed-Loop Libration Control?").ask()
-    if control_enable is None:
-        sys.exit(0)
-    params.control_enable = control_enable
-    if control_enable:
+    # Apply numerical overrides
+    if args:
+        if args.target_mass is not None:
+            params.m_target = args.target_mass
+        if args.edt_length is not None:
+            params.L_edt = args.edt_length
+        if args.inclination is not None:
+            params.inc = np.radians(args.inclination)
+    
+    # 3. Control Setup
+    if args is None:
+        params.control_enable = questionary.confirm("Enable Closed-Loop Libration Control?").ask()
+        if params.control_enable is None: sys.exit(0)
+    else:
+        params.control_enable = args.control
+    
+    if params.control_enable:
         limit_deg = questionary.text("Libration Angle Limit [deg]:", default="20.0").ask()
-        if limit_deg is None:
-            sys.exit(0)
+        if limit_deg is None: sys.exit(0)
         params.pitch_limit = np.radians(float(limit_deg))
         
         kp = questionary.text("Control Gain Kp [V/rad]:", default="50.0").ask()
-        if kp is None:
-            sys.exit(0)
+        if kp is None: sys.exit(0)
         params.k_p = float(kp)
 
     X0 = setup_initial_state(params)
-    run_name = f"run_{len(os.listdir('results'))+1:03d}"
-    run_folder = get_results_folder(run_name)
+    run_name = f"run_{len(os.listdir('results'))+1:03d}{uuid.uuid4().hex[:4]}"
+    run_folder = get_results_folder(run_name, base_dir="results")
     
     n_total = int(t_end * sampling_hz) + 1
     n_state = len(X0)
@@ -225,19 +260,23 @@ def initialize_new_mission(t_end, sampling_hz):
     dummy_sma = calculate_com_sma(dummy_t, dummy_X, params.to_numba_params(), params)
     save_config_params_results_yaml("config_params_results.yaml", run_folder, dummy_t, dummy_sma, params, params.to_numba_params())
     
-    print(f"Starting new simulation: {run_name} ({params.mission_config})")
+    print(f"Starting new simulation: {run_name} ({params.system_config} - {params.mission_config})")
     return run_folder, 0.0, X0, params, hist_t, hist_X, 0, 0.0
 
-def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
-    # 0. Constants
+def run_mission(args=None):
+    skip_checkpoint = args.no_checkpoint if args else False
+    # Default to skipping test unless explicitly asked
+    skip_test = not args.test if args else True
+    method = args.method if args else 'RK45'
+    
     sampling_hz = 1.0
-    t_end = 24 * 60 * 60 # 1 day
+    t_end = 24 * 60 * 60 # 10 hours
     step_size = 100000.0
 
     # 1. Setup Phase
-    rf, t_start, X_curr, params, hist_t, hist_X, curr_idx, comp_prev = handle_mission_resumption(t_end, sampling_hz)
+    rf, t_start, X_curr, params, hist_t, hist_X, curr_idx, comp_prev = handle_mission_resumption(t_end, sampling_hz, args=args)
     if rf is None: # New run
-        rf, t_start, X_curr, params, hist_t, hist_X, curr_idx, comp_prev = initialize_new_mission(t_end, sampling_hz)
+        rf, t_start, X_curr, params, hist_t, hist_X, curr_idx, comp_prev = initialize_new_mission(t_end, sampling_hz, args=args)
 
     p_arr = params.to_numba_params()
 
@@ -249,7 +288,7 @@ def run_mission(skip_checkpoint=False, skip_test=False, method='RK45'):
             return
 
     session_start = time.time()
-    print(f"\n--- Starting Simulation ---\nMethod: {method}\nTotal Duration: {t_end/3600:.2f} hours\nCheckpointing: {'Disabled' if skip_checkpoint else 'Enabled'}\nPre-flight Test: {'Skipped' if skip_test else 'Enabled'}\n")
+    print(f"\n--- Starting Simulation ---\nMethod: {method}\nTotal Duration: {t_end/3600:.2f} hours\nCheckpointing: {'Disabled' if skip_checkpoint else 'Enabled'}\n")
     
     t_curr = t_start
     # 3. Execution Phase (Segmented Integration Loop)
@@ -342,13 +381,20 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Multi-body EDT Simulation with Checkpointing")
     parser.add_argument("--no-checkpoint", action="store_true", 
                         help="Skip periodic binary checkpoints and intermediate CSV saves for maximum performance.")
-    parser.add_argument("--no-test", action="store_true",
-                        help="Skip validation and pre test for numerical stability.")
+    parser.add_argument("--test", action="store_true",
+                        help="Run validation and pre test for numerical stability.")
     parser.add_argument("--method", choices=['RK45', 'VERLET', 'LSODA', 'RADAU'], default='RK45',
                         help="Integrator: Numba DP5(4) RK45 (default), Velocity Verlet, or numbalsoda LSODA.")
+    # Batch run parameters
+    parser.add_argument("--target-mass", type=float, help="Target satellite mass [kg]")
+    parser.add_argument("--edt-length", type=float, help="EDT length [m]")
+    parser.add_argument("--inclination", type=float, help="Inclination [deg]")
+    parser.add_argument("--system-config", choices=['SC_EDT_TARGET', 'SC_ROPE_EDT_TARGET'], help="System topology")
+    parser.add_argument("--mission-config", help="Initial alignment")
+    parser.add_argument("--control", action="store_true", help="Enable closed-loop control")
+    parser.add_argument("--resume", action="store_true", help="Prompt to resume an interrupted simulation")
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_arguments()
-    # cProfile.run("run_mission(skip_checkpoint=args.no_checkpoint, skip_test=args.no_test, method=args.method)", "profile_results.prof")
-    run_mission(skip_checkpoint=args.no_checkpoint, skip_test=args.no_test, method=args.method)
+    run_mission(args=args)

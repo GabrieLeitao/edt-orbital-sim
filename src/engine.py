@@ -13,102 +13,140 @@ def setup_initial_state(params):
     """
     Sets up the initial state vector for the coupled multi-body system.
     
+    Initializes the system such that the Center of Mass (CoM) is in a circular orbit
+    at the altitude specified by params.alt. This prevents the initial "kick" 
+    caused by velocity mismatches across the tether length.
+
     Supports:
     - Inclination (params.inc)
     - Eccentricity (params.e)
-    - Mission Config: 'PERPENDICULAR' or 'RADIAL'
-    
-    Mission Configurations:
-    'PERPENDICULAR' (Default):
-    1. SC and Target: Same altitude (a_init), separated by L_rope in-track.
-    2. EDT: Deployed radially inward from the Spacecraft.
-    
-    'RADIAL':
-    1. Target, SC, and EDT: All radially aligned.
-    2. Target: Farthest from Earth center.
-    3. EDT Tip: Closest to Earth center.
-    
-    Indices (Radial-Inward):
+    - System topology (params.system_config) and alignment (params.mission_config)
+
+    System Topologies:
+    'SC_ROPE_EDT_TARGET' (legacy): Tip(0)-EDT-SC(N_edt)-rope-Target(N_edt+1)
+    'SC_EDT_TARGET' (new): SC(0)-EDT-Target(N_edt), no rope, single chain;
+        from Earth outward the order is SC (innermost) -> EDT -> Target (outermost).
+
+    Mission Configurations (alignment of the initial chain):
+    'RADIAL' (both topologies):
+        All components aligned along the local vertical; Target farthest from
+        Earth, EDT tip / SC closest to Earth.
+    'PERPENDICULAR' (legacy only):
+        SC and Target at the same altitude, separated by L_rope in-track;
+        EDT deployed radially inward from the Spacecraft.
+    'FULL_IN_TRACK' (SC_EDT_TARGET only):
+        The whole SC-EDT-Target chain laid along the velocity (in-track)
+        direction; Target leading, SC trailing.
+
+    Indices (legacy, radial-inward):
     - Index 0: Tip Mass
     - Index 1 to N_edt-1: EDT flexible beads
     - Index N_edt: Spacecraft (SC)
     - Index N_edt + 1: Target Satellite
     """
-    # 1. Basic Orbital Parameters
-    a = params.R_e + params.alt
+    # 1. Basic Orbital Parameters for System CoM
+    a_com = params.R_e + params.alt
     e = params.e
     inc = params.inc
     mu = params.mu
     
-    # Target at Periapsis for simplicity if e > 0
-    r_p = a * (1.0 - e)
-    v_p = np.sqrt(mu / a * (1.0 + e) / (1.0 - e))
-    omega = v_p / r_p # Instantaneous angular velocity at periapsis
+    # CoM at Periapsis
+    r_p_com = a_com * (1.0 - e)
+    v_p_com = np.sqrt(mu / a_com * (1.0 + e) / (1.0 - e))
+    omega_com = v_p_com / r_p_com 
     
     num_masses = params.num_masses
     l_rope = params.L_rope
     l_edt = params.L_edt
+    n_edt = params.N_edt
+    is_sc_edt_target = (params.system_config == 'SC_EDT_TARGET')
     
-    # 2. Define state in 'Orbital Plane' (X=Radial, Y=In-Track, Z=Cross-Track)
-    # This frame has Z along angular momentum.
-    pos_orb = np.zeros((num_masses, 3))
-    vel_orb = np.zeros((num_masses, 3))
+    # 2. Define relative positions in 'Orbital Plane' (X=Radial, Y=In-Track)
+    # Positions are relative to the system CoM initially, then shifted.
+    m_nodes = np.zeros(num_masses)
+    p_arr_dummy = params.to_numba_params()
+    from dynamics import get_mass_fast
+    for i in range(num_masses):
+        m_nodes[i] = get_mass_fast(i, p_arr_dummy, num_masses)
+    total_m = np.sum(m_nodes)
+    
+    pos_rel = np.zeros((num_masses, 3))
     
     if hasattr(params, 'mission_config') and params.mission_config == 'RADIAL':
         # --- RADIAL ALIGNMENT ---
         # Target (Index N_edt + 1) at farthest: [r_p, 0, 0]
-        idx_target = params.N_edt + 1
-        pos_orb[idx_target] = np.array([r_p, 0.0, 0.0])
-        vel_orb[idx_target] = np.array([0.0, v_p, 0.0])
-        
-        # Spacecraft (Index N_edt) at [r_p - L_rope, 0, 0]
-        idx_sc = params.N_edt
-        pos_orb[idx_sc] = np.array([r_p - l_rope, 0.0, 0.0])
-        vel_orb[idx_sc] = np.array([0.0, omega * (r_p - l_rope), 0.0])
-        
+        # SC (Index N_edt) at [r_p - L_rope, 0, 0]
         # Tip (Index 0) at [r_p - L_rope - L_edt, 0, 0]
-        pos_orb[0] = np.array([r_p - l_rope - l_edt, 0.0, 0.0])
-        vel_orb[0] = np.array([0.0, omega * (r_p - l_rope - l_edt), 0.0])
         
-        # EDT beads (Index 1 to N_edt-1) distributed radially
-        l0_seg = l_edt / params.N_edt
-        for i in range(1, params.N_edt):
-            # distance below SC
-            h_below = (params.N_edt - i) * l0_seg
-            r_node = (r_p - l_rope) - h_below
-            pos_orb[i] = np.array([r_node, 0.0, 0.0])
-            vel_orb[i] = np.array([0.0, omega * r_node, 0.0])
+        # Local coords (Radial-Inward from Target):
+        y_local = np.zeros(num_masses)
+        l0_seg = l_edt / n_edt
+        
+        if is_sc_edt_target:
+            # SC_EDT_TARGET: 0=SC, 1..N-1=Beads, N=Target
+            y_local[n_edt] = 0.0 # Target at farthest
+            for i in range(n_edt):
+                y_local[i] = -(n_edt - i) * l0_seg
+        else:
+            # Legacy: 0=Tip, 1..N-1=Beads, N=SC, N+1=Target
+            y_local[n_edt + 1] = 0.0 # Target at farthest
+            y_local[n_edt] = -l_rope
+            y_local[0] = -l_rope - l_edt
+            for i in range(1, n_edt):
+                y_local[i] = -l_rope - (n_edt - i) * l0_seg
+            
+        y_com_local = np.sum(m_nodes * y_local) / total_m
+        for i in range(num_masses):
+            pos_rel[i, 0] = y_local[i] - y_com_local
+    elif is_sc_edt_target and params.mission_config == 'FULL_IN_TRACK':
+        # --- FULL IN-TRACK (SC_EDT_TARGET only) ---
+        # The whole single chain is laid along the in-track (velocity) axis.
+        # Target leads (s=0), SC trails; x (radial) is 0 for all nodes.
+        # SC_EDT_TARGET indexing: 0=SC, 1..N-1=Beads, N=Target.
+        s_loc = np.zeros(num_masses)  # in-track coordinate
+        l0_seg = l_edt / n_edt
+        s_loc[n_edt] = 0.0  # Target leading
+        for i in range(n_edt):
+            s_loc[i] = -(n_edt - i) * l0_seg
+
+        s_com_loc = np.sum(m_nodes * s_loc) / total_m
+        for i in range(num_masses):
+            pos_rel[i, 1] = s_loc[i] - s_com_loc
     else:
-        # --- PERPENDICULAR ROPE (Default) ---
-        # Target (Index N_edt + 1) at [r_p, 0, 0]
-        idx_target = params.N_edt + 1
-        pos_orb[idx_target] = np.array([r_p, 0.0, 0.0])
-        vel_orb[idx_target] = np.array([0.0, v_p, 0.0])
-        
-        # Spacecraft (Index N_edt) at [r_p, -L_rope, 0]
-        idx_sc = params.N_edt
-        pos_orb[idx_sc] = np.array([r_p, -l_rope, 0.0])
-        # Velocity includes the 'swing' term for the in-track separation
-        vel_orb[idx_sc] = np.array([omega * l_rope, v_p, 0.0])
-        
-        # Tip (Index 0) at [r_p - L_edt, -L_rope, 0]
-        pos_orb[0] = np.array([r_p - l_edt, -l_rope, 0.0])
-        vel_orb[0] = np.array([omega * l_rope, omega * (r_p - l_edt), 0.0])
-        
-        # EDT beads (Index 1 to N_edt-1) distributed along the radial line at y = -L_rope
-        l0_seg = l_edt / params.N_edt
-        for i in range(1, params.N_edt):
-            # distance below SC
-            h_below = (params.N_edt - i) * l0_seg
-            r_node = r_p - h_below
-            pos_orb[i] = np.array([r_node, -l_rope, 0.0])
-            vel_orb[i] = np.array([omega * l_rope, omega * r_node, 0.0])
-        
-    # 3. Rotate from Orbital Plane to ECI
-    # Standard transformation using modular Rx(inc) from frames.py.
-    # This ensures a prograde orbit (h_z > 0) moving Northward at t=0.
-    R_inc = get_rotation_matrix_eci(inc)
+        # --- PERPENDICULAR (legacy SC_ROPE_EDT_TARGET only) ---
+        # SC and Target share an altitude separated by L_rope in-track; the EDT
+        # (Tip..SC) hangs radially inward from the SC. x=radial, y=in-track.
+        x_loc = np.zeros(num_masses)
+        y_loc = np.zeros(num_masses)
+        l0_seg = l_edt / n_edt
+
+        x_loc[n_edt + 1] = 0.0
+        y_loc[n_edt + 1] = 0.0
+        x_loc[n_edt] = 0.0
+        y_loc[n_edt] = -l_rope
+        x_loc[0] = -l_edt
+        y_loc[0] = -l_rope
+        for i in range(1, n_edt):
+            x_loc[i] = -(n_edt - i) * l0_seg
+            y_loc[i] = -l_rope
+
+        x_com_loc = np.sum(m_nodes * x_loc) / total_m
+        y_com_loc = np.sum(m_nodes * y_loc) / total_m
+        for i in range(num_masses):
+            pos_rel[i, 0] = x_loc[i] - x_com_loc
+            pos_rel[i, 1] = y_loc[i] - y_com_loc
+
+    pos_orb = np.zeros((num_masses, 3))
+    vel_orb = np.zeros((num_masses, 3))
+    r_com_vec = np.array([r_p_com, 0.0, 0.0])
+    v_com_vec = np.array([0.0, v_p_com, 0.0])
+    omega_vec = np.array([0.0, 0.0, omega_com])
     
+    for i in range(num_masses):
+        pos_orb[i] = r_com_vec + pos_rel[i]
+        vel_orb[i] = v_com_vec + np.cross(omega_vec, pos_rel[i])
+        
+    R_inc = get_rotation_matrix_eci(inc)
     pos = np.dot(pos_orb, R_inc.T)
     vel = np.dot(vel_orb, R_inc.T)
     
@@ -172,8 +210,8 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
     Y_out[0] = X0
 
     # Setup shared progress pointer and Abort Flag
-    # We use a 30-element array to match integrators.P_ARR_LEN
-    p_arr_ext = np.zeros(len(p_arr) + 2)
+    # We use a 40-element array to match integrators.P_ARR_LEN
+    p_arr_ext = np.zeros(40)
     p_arr_ext[:len(p_arr)] = p_arr
     p_arr_ext[p.IDX_PROGRESS] = t0
     p_arr_ext[p.IDX_ABORT] = 0.0 # Abort flag
@@ -200,9 +238,9 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
         try:
             y = X0.astype(np.float64).copy()
             if method_u == 'RK45':
-                rk45_dopri_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out, p_arr_ext[p.IDX_PROGRESS : p.IDX_PROGRESS + 1])
+                rk45_dopri_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out)
             elif method_u == 'VERLET':
-                velocity_verlet_integrate(t0, tf, y, p_arr_ext, t_eval, Y_out, p_arr_ext[p.IDX_PROGRESS : p.IDX_PROGRESS + 1])
+                velocity_verlet_integrate(t0, tf, y, p_arr_ext, t_eval, Y_out)
             elif method_u == 'LSODA':
                 lsoda_integrate(t0, tf, y, p_arr_ext, t_eval, rtol, atol, Y_out)
             elif method_u == 'RADAU':
@@ -232,7 +270,7 @@ def integrate_system(X0, t_span, p_arr, rtol=1e-7, atol=1e-9, pbar=None,
             monitor_thread.join(timeout=2.0)
             # Final catch-up update
             if pbar is not None:
-                remaining = int(p_arr_ext[27] - t0) # Progress made
+                remaining = int(p_arr_ext[p.IDX_PROGRESS] - t0) # Progress made
                 # pbar.update is incremental, so we just finish the bar if complete
                 pass
 

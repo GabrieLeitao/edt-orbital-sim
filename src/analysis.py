@@ -21,6 +21,7 @@ def calculate_total_energy_fast(p_frame, v_frame, masses, p_arr):
     num_masses = len(masses)
     mu = p_arr[p.IDX_MU]
     n_edt = int(p_arr[p.IDX_N_EDT])
+    is_sc_edt_target = p_arr[p.IDX_SYSTEM_CONFIG] > 0.5
     
     # Derived EDT Stiffness
     area_edt = p_arr[p.IDX_AREA_EDT]
@@ -42,9 +43,10 @@ def calculate_total_energy_fast(p_frame, v_frame, masses, p_arr):
         if dr > l_edt_seg:
             e_total += 0.5 * k_edt * (dr - l_edt_seg)**2
             
-    dr_rope = np.linalg.norm(p_frame[n_edt+1] - p_frame[n_edt])
-    if dr_rope > l_rope_nom:
-        e_total += 0.5 * k_rope * (dr_rope - l_rope_nom)**2
+    if not is_sc_edt_target:
+        dr_rope = np.linalg.norm(p_frame[n_edt+1] - p_frame[n_edt])
+        if dr_rope > l_rope_nom:
+            e_total += 0.5 * k_rope * (dr_rope - l_rope_nom)**2
     return e_total
 
 def calculate_com_sma(t_vals, X_vals, p_arr, params):
@@ -92,8 +94,10 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params, include_sma=True, sma_
     5. Forces: Lorentz vs. Drag magnitude comparison.
     """
     num_masses = params.num_masses
+    n_edt = params.N_edt
     masses = np.array([get_mass_fast(i, p_arr, num_masses) for i in range(num_masses)])
     total_m = np.sum(masses)
+    is_sc_edt_target = (params.system_config == 'SC_EDT_TARGET')
     
     count = len(t_vals)
     energy = np.zeros(count)
@@ -111,8 +115,13 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params, include_sma=True, sma_
         else:
             sma = calculate_com_sma(t_vals, X_vals, p_arr, params)
 
-    idx_sc = params.N_edt
-    idx_target = params.N_edt + 1
+    if is_sc_edt_target:
+        idx_start = 0 # SC
+        idx_end = n_edt # Target
+    else:
+        idx_start = 0 # Tip
+        idx_sc = n_edt
+        idx_end = n_edt + 1
 
     for i in range(count):
         p_frame = X_vals[i, :3*num_masses].reshape((num_masses, 3))
@@ -120,16 +129,24 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params, include_sma=True, sma_
         
         energy[i] = calculate_total_energy_fast(p_frame, v_frame, masses, p_arr)
         
-        r_rope = p_frame[idx_target] - p_frame[idx_sc]
-        rope_L[i] = np.linalg.norm(r_rope)
-        edt_L[i] = np.linalg.norm(p_frame[idx_sc] - p_frame[0])
+        if is_sc_edt_target:
+            rope_L[i] = 0.0
+            edt_L[i] = np.linalg.norm(p_frame[idx_end] - p_frame[idx_start])
+        else:
+            rope_L[i] = np.linalg.norm(p_frame[idx_end] - p_frame[idx_sc])
+            edt_L[i] = np.linalg.norm(p_frame[idx_sc] - p_frame[idx_start])
         
         # Libration
         r_com = np.zeros(3)
         for j in range(num_masses):
             r_com += (masses[j] / total_m) * p_frame[j]
-        u_v = r_com / np.linalg.norm(r_com)
-        u_tether = (p_frame[idx_target] - p_frame[0]) / (rope_L[i] + edt_L[i])
+        r_com_mag = np.linalg.norm(r_com)
+        u_v = r_com / max(r_com_mag, 1e-6)
+        
+        tether_vec = p_frame[idx_end] - p_frame[idx_start]
+        tether_len = np.linalg.norm(tether_vec)
+        u_tether = tether_vec / max(tether_len, 1e-6)
+        
         pitch[i] = np.degrees(np.arccos(np.clip(np.dot(u_v, u_tether), -1.0, 1.0)))
         
         # Physics Metrics (Current, Forces)
@@ -156,16 +173,18 @@ def save_csv(filename, run_folder, t_vals, telemetry_dict, X_vals, params, silen
     telemetry_dict: Dictionary of arrays to be saved as columns.
     """
     num_masses = params.num_masses
+    n_edt = params.N_edt
+    is_sc_edt_target = (params.system_config == 'SC_EDT_TARGET')
     
-    # 1. Prepare Telemetry Columns
     tel_names = list(telemetry_dict.keys())
     tel_data = np.column_stack([telemetry_dict[name] for name in tel_names])
-    
     cols = ['time_s'] + tel_names
 
-    # 2. Prepare State Columns
     for i in range(num_masses):
-        label = f"m{i}_target" if i == params.N_edt + 2 else (f"m{i}_sc" if i == params.N_edt + 1 else (f"m{i}_tip" if i == 0 else f"m{i}_bead"))
+        if is_sc_edt_target:
+            label = f"m{i}_target" if i == n_edt else (f"m{i}_sc" if i == 0 else f"m{i}_bead")
+        else:
+            label = f"m{i}_target" if i == n_edt + 1 else (f"m{i}_sc" if i == n_edt else (f"m{i}_tip" if i == 0 else f"m{i}_bead"))
         cols += [f'{label}_rx_m', f'{label}_ry_m', f'{label}_rz_m', f'{label}_vx_ms', f'{label}_vy_ms', f'{label}_vz_ms']
 
     pos_data = X_vals[:, :3*num_masses].reshape(-1, num_masses, 3)
@@ -183,7 +202,6 @@ def save_csv(filename, run_folder, t_vals, telemetry_dict, X_vals, params, silen
     mode = 'a' if append else 'w'
     header = not append or not os.path.exists(filepath)
     df.to_csv(filepath, index=False, mode=mode, header=header)
-
     if not silent:
         print(f"Data {'appended' if append else 'saved'} to {filepath}")
 
@@ -218,8 +236,6 @@ def calculate_mission_results(t_vals, sma_com, params, total_compute_time=0.0):
 
     # We define decay rate as positive for losing altitude
     decay_rate_mps = -slope 
-
-    # 2. Key Metrics
     initial_sma = float(sma_com[0])
     final_sma = float(sma_com[-1])
     sma_drop_total = initial_sma - final_sma
@@ -229,8 +245,7 @@ def calculate_mission_results(t_vals, sma_com, params, total_compute_time=0.0):
     # Using initial SMA for period consistency
     period_init = 2.0 * np.pi * np.sqrt(initial_sma**3 / params.mu)
     decay_per_orbit_m = decay_rate_mps * period_init
-
-    results = {
+    return {
         "com_sma_initial_m": initial_sma,
         "com_sma_final_m": final_sma,
         "com_sma_drop_total_m": sma_drop_total,
@@ -243,8 +258,6 @@ def calculate_mission_results(t_vals, sma_com, params, total_compute_time=0.0):
         "total_simulated_time_s": float(t_vals[-1]),
         "total_compute_time_s": float(total_compute_time)
     }
-    return results
-
 
 def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com=None, params=None, p_arr=None, is_final=False, silent=False, total_compute_time=0.0):
     """
@@ -270,25 +283,11 @@ def save_config_params_results_yaml(filename, run_folder, t_vals, sma_com=None, 
             report_hash = hashlib.sha256(report_input.encode()).hexdigest()
 
     output_data = {
-        "metadata": {
-            "run_id": run_id,
-            "description": "Electrodynamic Tether Orbital Decay Simulation",
-            "parameter_hash": p_hash,
-            "report_hash": report_hash
-        },
+        "metadata": {"run_id": run_id, "description": "EDT Orbital Decay Simulation", "parameter_hash": p_hash, "report_hash": report_hash},
         "parameters": params.to_dict() if params else {},
     }
-
-    if results:
-        output_data["results"] = results
-
+    if results: output_data["results"] = results
     filepath = os.path.join(run_folder, filename)
-
     with open(filepath, 'w') as file:
         yaml.dump(output_data, file, default_flow_style=False, sort_keys=False)
-
-    if not silent:
-        if is_final:
-            print(f"Final mission report and integrity hash saved to {filepath}")
-        else:
-            print(f"Simulation parameters initialized at {filepath}")
+    if not silent: print(f"{'Final mission report' if is_final else 'Simulation parameters initialized'} at {filepath}")

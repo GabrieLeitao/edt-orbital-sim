@@ -20,9 +20,8 @@ from dynamics import tether_dynamics_fast
 
 
 # Length of the flat parameter array from SimulationParams.to_numba_params().
-# Increased to 40 to include control parameters and progress/abort flags.
+# Fixed at 40 to include control parameters and progress/abort flags.
 P_ARR_LEN = 40
-
 
 # ---------------------------------------------------------------------------
 # Dormand-Prince 5(4) coefficients (Butcher tableau)
@@ -40,7 +39,7 @@ _E1 = 71.0/57600.0; _E3 = -71.0/16695.0; _E4 = 71.0/1920.0; _E5 = -17253.0/33920
 
 
 @njit(fastmath=True, cache=True, nogil=True)
-def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol, Y_out, progress_ptr):
+def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol, Y_out):
     """
     Adaptive Dormand-Prince 5(4) integrator with FSAL.
     Output at t_eval via cubic Hermite interpolation.
@@ -60,9 +59,7 @@ def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol, Y_out, progress_
     for i in range(n):
         y[i] = y0[i]
 
-    # Physically grounded step size (CFL condition)
-    # Speed of sound c_s = sqrt(E / rho)
-    # dt_wave = dl / c_s
+    # Step limits (CFL)
     l_edt = p_arr[p.IDX_L_EDT]
     n_edt = p_arr[p.IDX_N_EDT]
     e_edt = p_arr[p.IDX_E_EDT]
@@ -157,39 +154,30 @@ def rk45_dopri_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol, Y_out, progress_
                 y[i] = y_new[i]
                 k1[i] = k7[i]
             t = t_new
-            progress_ptr[0] = t # Memory-based progress report
+            p_arr[p.IDX_PROGRESS] = t
             
             # Check for abort signal
             if p_arr[p.IDX_ABORT] > 0.5:
                 break
 
-            if err_norm < 1e-10:
-                h_factor = 5.0
-            else:
-                h_factor = 0.9 * err_norm**(-alpha) * err_prev**beta
-            if h_factor > 5.0: h_factor = 5.0
-            if h_factor < 0.2: h_factor = 0.2
-            h *= h_factor
+            h_factor = 0.9 * err_norm**(-alpha) * err_prev**beta if err_norm > 1e-10 else 5.0
+            h *= min(5.0, max(0.2, h_factor))
             if h > h_max: h = h_max
-            err_prev = err_norm if err_norm > 1e-4 else 1e-4
+            err_prev = max(err_norm, 1e-4)
         else:
-            h_factor = 0.9 * err_norm**(-1.0/order)
-            if h_factor < 0.1: h_factor = 0.1
-            h *= h_factor
+            h *= max(0.1, 0.9 * err_norm**(-0.2))
             if h < h_min:
                 break
 
-    # Fill any trailing un-evaluated points with the last state (defensive)
     while eval_idx < m:
         for i in range(n):
             Y_out[eval_idx, i] = y[i]
         eval_idx += 1
-
     return Y_out
 
 
 @njit(fastmath=True, cache=True, nogil=True)
-def velocity_verlet_integrate(t0, tf, y0, p_arr, t_eval, Y_out, progress_ptr):
+def velocity_verlet_integrate(t0, tf, y0, p_arr, t_eval, Y_out):
     """
     Fixed-step Velocity Verlet integrator.
     Symplectic (2nd order) for conservative forces.
@@ -197,47 +185,20 @@ def velocity_verlet_integrate(t0, tf, y0, p_arr, t_eval, Y_out, progress_ptr):
     Fills Y_out in-place. Y_out shape (len(t_eval), n_state).
     Updates progress_ptr[0] with current t.
     """
-    n_state = y0.shape[0]
-    m_eval = t_eval.shape[0]
-    n_masses = n_state // 6
-    n_dof = 3 * n_masses
+    n_state = y0.shape[0]; m_eval = t_eval.shape[0]; n_dof = 3 * (n_state // 6)
     
-    # Y_out[0] assumed filled by caller
+    l_edt = p_arr[p.IDX_L_EDT]; n_edt = p_arr[p.IDX_N_EDT]; e_edt = p_arr[p.IDX_E_EDT]; rho_al = p_arr[p.IDX_RHO_AL]
+    dt = 0.1 * (l_edt / n_edt) / np.sqrt(e_edt / rho_al)
     
-    # CFL-based fixed step
-    l_edt = p_arr[p.IDX_L_EDT]
-    n_edt = p_arr[p.IDX_N_EDT]
-    e_edt = p_arr[p.IDX_E_EDT]
-    rho_al = p_arr[p.IDX_RHO_AL]
-    
-    dl = l_edt / n_edt
-    c_s = np.sqrt(e_edt / rho_al)
-    dt_wave = dl / c_s
-    
-    # Fixed dt: 0.1 * dt_wave is safe for explicit stability
-    dt = 0.1 * dt_wave
-    
-    t = t0
-    y = y0.copy()
-    
-    # Initial Acceleration
+    t = t0; y = y0.copy()
     dx_init = tether_dynamics_fast(t, y, p_arr)
     a_n = dx_init[n_dof:].copy()
     
     eval_idx = 1
     while t < tf:
-        if t + dt > tf:
-            dt_step = tf - t
-        else:
-            dt_step = dt
-            
-        # 1. Half-step velocity
-        v_n = y[n_dof:]
-        v_half = v_n + 0.5 * a_n * dt_step
-        
-        # 2. Full-step position
-        x_n = y[:n_dof]
-        x_next = x_n + v_half * dt_step
+        dt_step = min(dt, tf - t)
+        v_n = y[n_dof:]; v_half = v_n + 0.5 * a_n * dt_step
+        x_n = y[:n_dof]; x_next = x_n + v_half * dt_step
         
         # 3. Predictor step for acceleration
         t_next = t + dt_step
@@ -248,66 +209,36 @@ def velocity_verlet_integrate(t0, tf, y0, p_arr, t_eval, Y_out, progress_ptr):
         dx_next = tether_dynamics_fast(t_next, y_pred, p_arr)
         a_next = dx_next[n_dof:]
         
-        # 4. Final velocity update
-        v_next = v_half + 0.5 * a_next * dt_step
+        y[:n_dof] = x_next; y[n_dof:] = v_half + 0.5 * a_next * dt_step
+        a_n = a_next; t = t_next
+        p_arr[p.IDX_PROGRESS] = t
         
-        # Update state
-        y[:n_dof] = x_next
-        y[n_dof:] = v_next
-        a_n = a_next 
-        t = t_next
-        progress_ptr[0] = t
-        
-        # Check for abort signal
-        if p_arr[p.IDX_ABORT] > 0.5:
-            break
+        if p_arr[p.IDX_ABORT] > 0.5: break
         
         # Dense output at t_eval points
         while eval_idx < m_eval and t_eval[eval_idx] <= t + 1e-12:
-            for k in range(n_state):
-                Y_out[eval_idx, k] = y[k]
+            for k in range(n_state): Y_out[eval_idx, k] = y[k]
             eval_idx += 1
-            
     return Y_out
 
-
-# ---------------------------------------------------------------------------
-# LSODA via numbalsoda
-# ---------------------------------------------------------------------------
-# numbalsoda import + @cfunc compile are both heavy (~5s combined). Defer both
-# until LSODA is actually requested so the RK45 path stays cheap to import.
-_LSODA_FUNCPTR = None
-_lsoda_driver = None
-
+_LSODA_FUNCPTR = None; _lsoda_driver = None
 
 def _get_lsoda():
     """Lazy: imports numbalsoda and JITs the cfunc RHS on first call."""
     global _LSODA_FUNCPTR, _lsoda_driver
-    if _LSODA_FUNCPTR is not None:
-        return _LSODA_FUNCPTR, _lsoda_driver
-
+    if _LSODA_FUNCPTR is not None: return _LSODA_FUNCPTR, _lsoda_driver
     from numbalsoda import lsoda_sig, lsoda as lsoda_driver
 
     @cfunc(lsoda_sig, nogil=True)
     def _rhs_lsoda(t, y_ptr, dy_ptr, p_ptr):
         p_arr = nb.carray(p_ptr, (P_ARR_LEN,))
-        n_edt = int(p_arr[p.IDX_N_EDT])
-        neq = 6 * (2 + n_edt)
-        y = nb.carray(y_ptr, (neq,))
-        dy = nb.carray(dy_ptr, (neq,))
-        
-        # Report progress
+        num_masses = int(p_arr[p.IDX_NUM_MASSES])
+        neq = 6 * num_masses
+        y = nb.carray(y_ptr, (neq,)); dy = nb.carray(dy_ptr, (neq,))
         p_arr[p.IDX_PROGRESS] = t
-        
-        # Note: LSODA doesn't easily support aborting mid-step via RHS return,
-        # but the threaded wrapper in engine.py will catch it.
-        
         dx = tether_dynamics_fast(t, y, p_arr)
-        for i in range(neq):
-            dy[i] = dx[i]
-
-    _LSODA_FUNCPTR = _rhs_lsoda.address
-    _lsoda_driver = lsoda_driver
+        for i in range(neq): dy[i] = dx[i]
+    _LSODA_FUNCPTR = _rhs_lsoda.address; _lsoda_driver = lsoda_driver
     return _LSODA_FUNCPTR, _lsoda_driver
 
 
@@ -316,11 +247,8 @@ def lsoda_integrate(t0, tf, y0, p_arr, t_eval, rtol, atol, Y_out):
     Numbalsoda LSODA wrapper. Fills Y_out in-place.
     """
     funcptr, lsoda = _get_lsoda()
-    usol, success = lsoda(funcptr, y0, t_eval,
-                          data=p_arr, rtol=rtol, atol=atol, mxstep=50000)
-    if not success:
-        raise RuntimeError(f"LSODA failed in interval [{t0}, {tf}]")
-    
+    usol, success = lsoda(funcptr, y0, t_eval, data=p_arr, rtol=rtol, atol=atol, mxstep=50000)
+    if not success: raise RuntimeError("LSODA failed")
     Y_out[:] = usol
     return Y_out
 

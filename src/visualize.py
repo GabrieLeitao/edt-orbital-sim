@@ -82,6 +82,7 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
 
     params = SimulationParams.from_yaml(yaml_path)
     re = params.R_e
+    is_sc_edt_target = (params.system_config == 'SC_EDT_TARGET')
     
     pos_cols = [c for c in df.columns if '_rx_m' in c]
     vel_cols = [c for c in df.columns if '_vx_ms' in c]
@@ -158,9 +159,16 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
     v_line_forces = ax_forces.axvline(0, color='k', linestyle='--', alpha=0.5)
 
     # 3. Initialize Elements
+    # Index layout depends on the system topology:
+    #  - SC_EDT_TARGET (new): SC=0, beads=1..N-1, Target=last. No tip, no rope.
+    #  - SC_ROPE_EDT_TARGET (legacy): Tip=0, beads, SC=last-1, Target=last.
     target_idx = num_masses - 1
-    sc_idx = num_masses - 2
-    tip_idx = 0
+    if is_sc_edt_target:
+        sc_idx = 0
+        tip_idx = 0  # no separate tip; index 0 is the SC
+    else:
+        sc_idx = num_masses - 2
+        tip_idx = 0
 
     # Orbit Elements
     skip = max(1, frames // 500)
@@ -201,7 +209,10 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
 
     # EDT Elements (2D)
     line_edt_full, = ax_edt.plot([], [], 'g-', lw=1.5, alpha=0.8)
-    marker_tip_edt, = ax_edt.plot([], [], 'mo', markersize=5, label="Tip")
+    # No physical tip in the SC_EDT_TARGET topology — index 0 is the SC there.
+    marker_tip_edt, = ax_edt.plot([], [], 'mo', markersize=5,
+                                  label=("_nolegend_" if is_sc_edt_target else "Tip"))
+    marker_tip_edt.set_visible(not is_sc_edt_target)
     marker_sc_edt, = ax_edt.plot([], [], 'bo', markersize=5, label="SC")
     marker_target_edt, = ax_edt.plot([], [], 'rs', markersize=7, label="Target")
     ax_edt.legend()
@@ -272,12 +283,18 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         it = r_lvlh[:, 0]; ct = r_lvlh[:, 1]; rd = r_lvlh[:, 2] 
 
         # 3. Sat + Target View
-        line_st_rope.set_data(it[[sc_idx, target_idx]], rd[[sc_idx, target_idx]])
+        # Legacy: SC and Target are joined by the rope. New topology has no rope —
+        # SC and Target are the endpoints of the full EDT chain, so draw the chain.
+        if is_sc_edt_target:
+            line_st_rope.set_data(it, rd)
+            zoomed_limit_st = params.L_edt * 1.5
+        else:
+            line_st_rope.set_data(it[[sc_idx, target_idx]], rd[[sc_idx, target_idx]])
+            zoomed_limit_st = params.L_rope * 1.5
         marker_target_st.set_data([it[target_idx]], [rd[target_idx]])
         marker_sc_st.set_data([it[sc_idx]], [rd[sc_idx]])
-        zoomed_limit_st = params.L_rope * 1.5
         ax_sat_target.set_xlim([-zoomed_limit_st, zoomed_limit_st])
-        ax_sat_target.set_ylim([zoomed_limit_st, -zoomed_limit_st]) 
+        ax_sat_target.set_ylim([zoomed_limit_st, -zoomed_limit_st])
 
         # 4. EDT Behavior View
         line_edt_full.set_data(it, rd)

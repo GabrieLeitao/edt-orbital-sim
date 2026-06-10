@@ -193,7 +193,7 @@ def run_preflight_stability_check(X0, p_arr, params, method, duration=300.0):
         pos[i] += 0.005 * (target_pos - pos[i])
     
     kick_dir = (pos[1] - pos[0]) / np.linalg.norm(pos[1] - pos[0])
-    vel[0] += kick_dir * 1.0 
+    vel[0] += kick_dir * -5.0 
     
     X_stressed[:3*num_masses] = pos.flatten()
     X_stressed[3*num_masses:] = vel.flatten()
@@ -214,7 +214,7 @@ def run_preflight_stability_check(X0, p_arr, params, method, duration=300.0):
         return False, f"Dynamic Failure: {reason}"
     
     area_edt = np.pi * (params.diam_edt / 2.0)**2
-    breaking_t = 270e6 * area_edt
+    breaking_t = 270e6 / 2 * area_edt
     max_t, sf, growing = analyze_stress_evolution(sol.t, sol.y.T, params, breaking_t)
     
     print(f"Peak Stress Test Tension: {max_t:.2f} N (Safety Factor: {sf:.2f}x)")

@@ -49,25 +49,31 @@ If you observe the EDT "snapping" or "slingshotting" the spacecraft:
 3. **Remedy:** Reduce `I_edt` in `params.py` or increase `beta_edt` (damping) to stabilize the system.
 
 ### 3. Numerical Integration
-Two compiled integrators live in `integrators.py`; both keep the integration loop entirely outside the Python interpreter, eliminating the per-RHS-call overhead that dominated the previous `scipy.solve_ivp` profile.
+Four compiled integrators live in `integrators.py`; they keep the integration loop entirely outside the Python interpreter, eliminating the per-RHS-call overhead that dominated the previous `scipy.solve_ivp` profile.
 
 - **`RK45`** (default): Adaptive Dormand-Prince 5(4) implemented in pure `@njit`, with FSAL and cubic-Hermite dense output. Best for the smooth-orbit regime — roughly 2× faster than the previous scipy RK45 path.
-- **`LSODA`**: numbalsoda's compiled LSODA, called via a `@cfunc` RHS adapter. Implicit BDF for the stiff aluminum EDT modes. Currently uses LSODA's internal numerical Jacobian — slower than RK45 on this problem until an analytic Jacobian is plumbed through.
+- **`LSODA`**: numbalsoda's compiled LSODA, called via a `@cfunc` RHS adapter. Implicit BDF for the stiff aluminum EDT modes.
+- **`RADAU`**: Scipy's Radau (implicit) implementation, useful for extremely stiff systems where BDF methods are preferred.
 - **`VERLET`**: numba compiled Fixed-step Velocity Verlet integrator of order 2
 
-`engine.py:integrate_system` dispatches on the `method=` argument and sub-chunks the span so tqdm ticks roughly every 100 s of simulated time without breaking the compiled loop. Checkpoint state is signaled via `pbar.set_postfix_str(...)` on the same shared bar.
+## Mission Configurations
+The simulation supports multiple initial alignment modes:
+- **Perpendicular (Default):** The Spacecraft and Target are separated in-track (horizontal), with the EDT deployed radially inward. This is the standard "Gravity-Gradient stable" starting point for most tether missions.
+- **Radial:** All components (Target, SC, and EDT) are aligned along the local vertical.
+- **Full In-Track (SC_EDT_TARGET only):** The whole SC-EDT-Target chain is laid along the velocity direction; Target leading, SC trailing.
 
 ## File Structure
 - `src/`: Core source code for the simulation.
-    - `params.py`: Configuration for material properties (Young's Modulus, damping constants) and system masses.
+    - `params.py`: Configuration for material properties and system masses.
     - `dynamics.py`: Core physics engine with Rayleigh damping, smooth-slack logic, and J2/Drag/Lorentz forces.
-    - `engine.py`: Initialization kernel (Stable Gravity-Gradient configuration) and ODE driver.
-    - `analysis.py`: Telemetry engine for SMA decay, energy conservation, and libration analysis.
-    - `visualize.py`: Interactive 2x2 dashboard with ECI, Relative In-Plane (In-Track vs Radial), and LVLH 3D views.
+    - `engine.py`: Initialization kernel and ODE driver.
+    - `analysis.py`: Telemetry engine and mission result calculation.
+    - `analyze_decay.py`: Batch analysis tool for fitting performance laws ($D = c + k \frac{L^2}{M}$).
+    - `visualize.py`: Interactive 2x2 dashboard.
     - `stability.py`: Runs preflight stress test to check margins and if method is stable.
-    - `simulate.py`: Main entry point for running missions.
+    - `simulate.py`: Main entry point with CLI/Questionary interface.
 - `tests/`: Validation and test scripts.
-    - `validate_physics.py`: Checks structural integrity and energy conservation in a conservative scenario.
+    - `validate_physics.py`: Checks structural integrity and energy conservation.
     - `convergence_test.py`: Numerical convergence analysis.
 
 ## Building and Running
@@ -92,28 +98,40 @@ source .venv/bin/activate
    ```bash
    python src/simulate.py
    ```
-   *Propagates the full deorbiting mission with active Lorentz forces and drag. Supports periodic binary checkpointing for lossless resume.*
+   *Propagates the full deorbiting mission. Supports periodic binary checkpointing for lossless resume.*
+
+   **Resume an interrupted run:**
+   ```bash
+   python src/simulate.py --resume
+   ```
+
+   **Batch/CLI Overrides:**
+   ```bash
+   python src/simulate.py --target-mass 500 --edt-length 1000 --inclination 45 --control
+   ```
 
    **No checkpoint:**
-   To skip periodic checkpointing and intermediate CSV saves, use:
+   To skip periodic checkpointing, use:
    ```bash
    python src/simulate.py --no-checkpoint
-   ```
-   **No preflight stress test:**
-   To skip preflight stress validation test for material stability, use:
-   ```bash
-   python src/simulate.py --no-test
    ```
    **Select integrator:**
    ```bash
    python src/simulate.py --method RK45    # Numba Dormand-Prince 5(4), default
-   python src/simulate.py --method LSODA   # numbalsoda LSODA (implicit, for stiff regimes)
+   python src/simulate.py --method LSODA   # numbalsoda LSODA
+   python src/simulate.py --method RADAU   # Scipy Radau
    ```
 3. **Visualize**:
    ```bash
    python src/visualize.py
    ```
    *Interactive scrubbing with inverted Radial axis (Down = Earth) for standard physics interpretation.*
+
+4. **Batch Simulations**:
+   ```bash
+   python batch_run.py
+   ```
+   *Executes a parallelized parameter sweep (e.g., Mass, Length, Inclination) across multiple CPU cores for large-scale mission analysis.*
 
 
 ## Assumptions

@@ -8,42 +8,41 @@ from frames import get_earth_rotation_components
 def get_mass_fast(idx, p_arr, num_masses):
     """
     Numba-compatible mass lookup with lumped-mass distribution.
-    
-    Mass Distribution:
-    - Node 0 (Tip): m_tip + 0.5 * m_seg_edt
-    - Node 1 to N_edt-1 (Beads): m_seg_edt
-    - Node N_edt (Spacecraft): m_sc + 0.5 * m_seg_edt
-    - Node N_edt+1 (Target): m_target
+    Supports both SC_ROPE_EDT_TARGET and SC_EDT_TARGET configs.
     """
+    is_sc_edt_target = p_arr[p.IDX_SYSTEM_CONFIG] > 0.5
     n_edt = int(p_arr[p.IDX_N_EDT])
     m_edt_seg = p_arr[p.IDX_M_EDT_TOTAL] / n_edt
     
-    if idx == 0:
-        return p_arr[p.IDX_M_TIP] + 0.5 * m_edt_seg
-    elif idx < n_edt:
-        return m_edt_seg
-    elif idx == n_edt:
-        return p_arr[p.IDX_M_SC] + 0.5 * m_edt_seg
-    elif idx == n_edt + 1:
-        return p_arr[p.IDX_M_TARGET]
+    if is_sc_edt_target:
+        # SC_EDT_TARGET: 0=SC, 1..N-1=Beads, N=Target
+        if idx == 0:
+            return p_arr[p.IDX_M_SC] + 0.5 * m_edt_seg
+        elif idx < n_edt:
+            return m_edt_seg
+        elif idx == n_edt:
+            return p_arr[p.IDX_M_TARGET] + 0.5 * m_edt_seg
+        else:
+            return 0.0
     else:
-        return 0.0
+        # Legacy: 0=Tip, 1..N-1=Beads, N=SC, N+1=Target
+        if idx == 0:
+            return p_arr[p.IDX_M_TIP] + 0.5 * m_edt_seg
+        elif idx < n_edt:
+            return m_edt_seg
+        elif idx == n_edt:
+            return p_arr[p.IDX_M_SC] + 0.5 * m_edt_seg
+        elif idx == n_edt + 1:
+            return p_arr[p.IDX_M_TARGET]
+        else:
+            return 0.0
 
 @njit(fastmath=True, nogil=True)
 def smooth_tension(dl, dl_dot, k, beta):
     """
     Calculates tension with a smooth transition from slack to taut.
     Uses Rayleigh (proportional) damping: c = beta * k.
-    
-    Mathematical Physics:
-    A 'hard' max(0, tension) creates a discontinuity in the force derivative 
-    which triggers numerical 'bouncing'. This smooth-slack model uses a 
-    sigmoid-like transition to simulate the microscopic 'tightening' of 
-    molecular bonds before full tension is reached.
     """
-    # Pure linear tension + proportional damping
-    # c = beta * k
-    # 2. Calculate Elastic Force
     f_elastic = k * dl
     
     # 3. Calculate Damping Force
@@ -56,74 +55,100 @@ def smooth_tension(dl, dl_dot, k, beta):
 
     tension = (f_elastic + f_damping) * scale
 
-    if dl > 0:
-        max_allowed_damping = abs(f_elastic) * 5.0 # Allow some overshoot, but not infinite
-        if abs(f_damping * scale) > max_allowed_damping:
-            # Re-calculate tension with capped damping
-            d_sign = 1.0 if f_damping > 0 else -1.0
-            tension = (f_elastic + (d_sign * max_allowed_damping)) * scale
+    # Re-introduce a generous damping cap to prevent numerical "snaps" 
+    # but allow significant physical damping. 
+    max_d = max(abs(f_elastic) * 50.0, 10.0)
+    if abs(f_damping * scale) > max_d:
+        tension = (f_elastic + np.sign(f_damping) * max_d) * scale
     
     return max(0.0, tension)
 
 @njit(fastmath=True, nogil=True)
-def get_libration_angle_fast(pos, p_arr):
+def get_libration_metrics_fast(pos, vel, p_arr):
     """
-    Calculates the current libration angle (angle from local vertical).
+    Calculates signed libration angle (pitch) and its derivative (theta_dot).
     """
     num_masses = int(p_arr[p.IDX_NUM_MASSES])
     n_edt = int(p_arr[p.IDX_N_EDT])
+    is_sc_edt_target = p_arr[p.IDX_SYSTEM_CONFIG] > 0.5
     
-    # 1. Calculate Center of Mass
+    # 1. Calculate Center of Mass (CoM) Position and Velocity
     r_com = np.zeros(3)
+    v_com = np.zeros(3)
     total_m = 0.0
     for i in range(num_masses):
         m = get_mass_fast(i, p_arr, num_masses)
         r_com += m * pos[i]
+        v_com += m * vel[i]
         total_m += m
     r_com /= total_m
+    v_com /= total_m
     
-    # 2. Local Vertical Unit Vector
-    u_v = r_com / np.linalg.norm(r_com)
+    # 2. Local Vertical Unit Vector (Radial)
+    r_mag = np.linalg.norm(r_com)
+    u_r = r_com / max(r_mag, 1e-6)
     
-    # 3. Tether Axis Unit Vector (Tip to Target)
-    r_tether = pos[n_edt + 1] - pos[0]
-    u_t = r_tether / np.linalg.norm(r_tether)
+    # 3. Orbit Normal (Angular Momentum direction)
+    h_vec = np.cross(r_com, v_com)
+    h_mag = np.linalg.norm(h_vec)
+    if h_mag < 1e-6:
+        u_h = np.array([0.0, 0.0, 1.0])
+    else:
+        u_h = h_vec / h_mag
     
-    # 4. Angle calculation
-    cos_theta = np.dot(u_v, u_t)
+    # 4. In-Track Unit Vector (Forward)
+    u_theta = np.cross(u_h, u_r)
     
-    # Manual clip for Numba compatibility with scalars
-    if cos_theta > 1.0:
-        cos_theta = 1.0
-    elif cos_theta < -1.0:
-        cos_theta = -1.0
+    # 5. Tether Axis Unit Vector (Tip to Target or SC to Target)
+    if is_sc_edt_target:
+        idx_start = 0 # SC
+        idx_end = n_edt # Target
+    else:
+        idx_start = 0 # Tip
+        idx_end = n_edt + 1 # Target
         
-    return np.arccos(cos_theta)
+    r_tether = pos[idx_end] - pos[idx_start]
+    l_t = np.linalg.norm(r_tether)
+    u_t = r_tether / max(l_t, 1e-6)
+    
+    # 6. Project Tether onto the Orbital Plane
+    proj_r = np.dot(u_t, u_r)
+    proj_theta = np.dot(u_t, u_theta)
+    theta = np.arctan2(proj_theta, proj_r)
+    
+    # 7. Calculate Theta Dot (Rate of change of libration)
+    v_rel = vel[idx_end] - vel[idx_start]
+    omega_t_vec = np.cross(r_tether, v_rel) / max(l_t * l_t, 1e-6)
+    omega_orb_vec = h_vec / max(r_mag * r_mag, 1e-6)
+    theta_dot = np.dot(omega_t_vec - omega_orb_vec, u_h)
+    
+    return theta, theta_dot
 
 @njit(fastmath=True, nogil=True)
-def get_controlled_current(v_total_emf, pos, p_arr):
+def get_controlled_current(v_total_emf, pos, vel, p_arr):
     """
-    Implements closed-loop current control to limit libration.
+    Implements closed-loop current control (PD) to limit libration.
     """
     if p_arr[p.IDX_CONTROL_ENABLE] < 0.5:
         return v_total_emf / p_arr[p.IDX_R_TOTAL]
 
-    theta = get_libration_angle_fast(pos, p_arr)
+    theta, theta_dot = get_libration_metrics_fast(pos, vel, p_arr)
     theta_limit = p_arr[p.IDX_PITCH_LIMIT]
     k_p = p_arr[p.IDX_K_P]
+    k_d = p_arr[p.IDX_K_D]
     v_max = p_arr[p.IDX_V_MAX]
 
     # Active Control Logic: 
     # If the libration angle exceeds the limit, we apply an active voltage 
     # to counteract the current that is driving the libration.
     v_active = 0.0
-    if theta > theta_limit:
-        # P-control on the active voltage to 'quench' the current
-        # We try to drive the current to 0 (or reverse it) to stop the torque
-        error = theta - theta_limit
-        v_active = -k_p * error * np.sign(v_total_emf)
-    
-    # Clamp active voltage
+    v_sign = v_total_emf / np.sqrt(v_total_emf**2 + 0.1)
+
+    if abs(theta) > theta_limit:
+        error_p = theta - (np.sign(theta) * theta_limit)
+        v_active += k_p * error_p * v_sign
+        
+    v_active += k_d * theta_dot * v_sign
     v_active = max(-v_max, min(v_max, v_active))
     
     return (v_total_emf + v_active) / p_arr[p.IDX_R_TOTAL]
@@ -135,19 +160,18 @@ def tether_dynamics_fast(t, X, p_arr):
     X: [r0x, r0y, r0z, ..., v0x, v0y, v0z, ...]
     p_arr: Flat parameter array
     """
+    is_sc_edt_target = p_arr[p.IDX_SYSTEM_CONFIG] > 0.5
     n_edt = int(p_arr[p.IDX_N_EDT])
     num_masses = int(p_arr[p.IDX_NUM_MASSES])
     dX = np.zeros_like(X)
     
     # Extract positions and velocities
-    X_slice = np.ascontiguousarray(X[:3*num_masses])
-    pos = X_slice.reshape((num_masses, 3))
-    X_slice = np.ascontiguousarray(X[3*num_masses:])
-    vel = X_slice.reshape((num_masses, 3))
+    pos = X[:3*num_masses].reshape((num_masses, 3))
+    vel = X[3*num_masses:6*num_masses].reshape((num_masses, 3))
 
     accel = np.zeros((num_masses, 3))
     
-    # 0. Pre-calculate Earth rotation components once per call
+    # 0. Pre-calculate Earth rotation components
     omega_e = 7.2921151467e-5
     theta_g0 = 0.0 
     theta_gmst = (theta_g0 + omega_e * t) % (2 * np.pi)
@@ -190,37 +214,41 @@ def tether_dynamics_fast(t, X, p_arr):
         v_rel = v - np.cross(np.array([0.0, 0.0, omega_e]), r)
         v_rel_norm = np.linalg.norm(v_rel)
         
-        # Calculate node-specific area
-        if i == 0: # Tip
-            node_area = p_arr[p.IDX_AREA_TIP] + 0.5 * l0_edt_seg * diam_edt
-        elif i < n_edt: # Beads
-            node_area = l0_edt_seg * diam_edt
-        elif i == n_edt: # SC
-            node_area = area_sc + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
-        else: # Target
-            node_area = area_sc + 0.5 * l_rope * diam_rope
+        # Node area logic
+        if is_sc_edt_target:
+            if i == 0: node_area = area_sc + 0.5 * l0_edt_seg * diam_edt
+            elif i < n_edt: node_area = l0_edt_seg * diam_edt
+            else: node_area = area_sc + 0.5 * l0_edt_seg * diam_edt
+        else:
+            if i == 0: node_area = p_arr[p.IDX_AREA_TIP] + 0.5 * l0_edt_seg * diam_edt
+            elif i < n_edt: node_area = l0_edt_seg * diam_edt
+            elif i == n_edt: node_area = area_sc + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
+            else: node_area = area_sc + 0.5 * l_rope * diam_rope
 
         if v_rel_norm > 1e-3:
             f_drag = -0.5 * rho * cd * node_area * v_rel_norm * v_rel
             accel[i] += f_drag / get_mass_fast(i, p_arr, num_masses)
 
-    # 2. Internal Forces (Tension) - EDT (SC-Tip)
+    # 2. EDT Internal Forces (Tension & Lorentz)
     k_edt_seg = (p_arr[p.IDX_E_EDT] * area_edt) / l0_edt_seg
     beta_edt = p_arr[p.IDX_BETA_EDT]
     
     # PASS 1: Calculate Motional EMF and store B-fields for segments
     v_total_emf = 0.0
     b_fields = np.zeros((n_edt, 3))
+    omega_e_vec = np.array([0.0, 0.0, 7.2921151467e-5])
+    
     for j in range(n_edt):
         p_a = pos[j]; p_b = pos[j+1]
         r_seg = p_b - p_a
         v_mid = (vel[j] + vel[j+1]) / 2.0
         r_mid = (p_a + p_b) / 2.0
+        v_rel_mag = v_mid - np.cross(omega_e_vec, r_mid)
         b_vec, _ = get_environment_optimized(r_mid, v_mid, t, p_arr, cos_tg, sin_tg)
         b_fields[j] = b_vec
-        v_total_emf += np.dot(np.cross(v_mid, b_vec), r_seg)
+        v_total_emf += np.dot(np.cross(v_rel_mag, b_vec), r_seg)
         
-    i_dynamic = get_controlled_current(v_total_emf, pos, p_arr)
+    i_dynamic = get_controlled_current(v_total_emf, pos, vel, p_arr)
     
     # PASS 2: Apply Tension and Lorentz Forces
     for j in range(n_edt):
@@ -245,25 +273,23 @@ def tether_dynamics_fast(t, X, p_arr):
         accel[j] += 0.5 * f_l / m_a
         accel[j+1] += 0.5 * f_l / m_b
 
-    # Rope Link: SC (N) to Target (N+1)
-    idx_sc = n_edt
-    idx_target = n_edt + 1
-    r_rope_vec = pos[idx_target] - pos[idx_sc]
-    v_rope_vec = vel[idx_target] - vel[idx_sc]
-    l_r = np.linalg.norm(r_rope_vec)
-    l_r_safe = max(l_r, 1e-6)
-    l_dot_r = np.dot(r_rope_vec, v_rope_vec) / l_r_safe
-    
-    t_r = smooth_tension(l_r - p_arr[p.IDX_L_ROPE], l_dot_r, p_arr[p.IDX_K_ROPE], p_arr[p.IDX_BETA_ROPE])
-    f_t_r = (t_r / l_r_safe) * r_rope_vec
-    
-    accel[idx_sc] += f_t_r / get_mass_fast(idx_sc, p_arr, num_masses)
-    accel[idx_target] -= f_t_r / get_mass_fast(idx_target, p_arr, num_masses)
+    # 3. Rope Link (Only if legacy)
+    if not is_sc_edt_target:
+        idx_sc = n_edt
+        idx_target = n_edt + 1
+        r_rope_vec = pos[idx_target] - pos[idx_sc]
+        v_rope_vec = vel[idx_target] - vel[idx_sc]
+        l_r = np.linalg.norm(r_rope_vec)
+        l_r_safe = max(l_r, 1e-6)
+        l_dot_r = np.dot(r_rope_vec, v_rope_vec) / l_r_safe
+        t_r = smooth_tension(l_r - p_arr[p.IDX_L_ROPE], l_dot_r, p_arr[p.IDX_K_ROPE], p_arr[p.IDX_BETA_ROPE])
+        f_t_r = (t_r / l_r_safe) * r_rope_vec
+        accel[idx_sc] += f_t_r / get_mass_fast(idx_sc, p_arr, num_masses)
+        accel[idx_target] -= f_t_r / get_mass_fast(idx_target, p_arr, num_masses)
 
     # Assemble dX
     dX[:3*num_masses] = vel.flatten()
     dX[3*num_masses:] = accel.flatten()
-    
     return dX
 
 @njit(fastmath=True)
@@ -271,13 +297,12 @@ def compute_physics_metrics(t, X, p_arr):
     """
     Optimized physical metrics calculation.
     """
+    is_sc_edt_target = p_arr[p.IDX_SYSTEM_CONFIG] > 0.5
     n_edt = int(p_arr[p.IDX_N_EDT])
     num_masses = int(p_arr[p.IDX_NUM_MASSES])
     
-    X_pos_slice = np.ascontiguousarray(X[:3*num_masses])
-    pos = X_pos_slice.reshape((num_masses, 3))
-    X_vel_slice = np.ascontiguousarray(X[3*num_masses:])
-    vel = X_vel_slice.reshape((num_masses, 3))
+    pos = X[:3*num_masses].reshape((num_masses, 3))
+    vel = X[3*num_masses:6*num_masses].reshape((num_masses, 3))
     
     # Earth rotation components
     omega_e = 7.2921151467e-5
@@ -302,10 +327,14 @@ def compute_physics_metrics(t, X, p_arr):
         v_rel = v - np.cross(np.array([0.0, 0.0, omega_e]), r)
         v_rel_norm = np.linalg.norm(v_rel)
         
-        if i == n_edt + 1: node_area = area_sc + 0.5 * l_rope * diam_rope
-        elif i == n_edt: node_area = area_sc + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
-        elif i == 0: node_area = p_arr[p.IDX_AREA_TIP] + 0.5 * l0_edt_seg * diam_edt
-        else: node_area = diam_edt * l0_edt_seg
+        if is_sc_edt_target:
+            if i == 0 or i == n_edt: node_area = area_sc + 0.5 * l0_edt_seg * diam_edt
+            else: node_area = diam_edt * l0_edt_seg
+        else:
+            if i == n_edt + 1: node_area = area_sc + 0.5 * l_rope * diam_rope
+            elif i == n_edt: node_area = area_sc + 0.5 * l0_edt_seg * diam_edt + 0.5 * l_rope * diam_rope
+            elif i == 0: node_area = p_arr[p.IDX_AREA_TIP] + 0.5 * l0_edt_seg * diam_edt
+            else: node_area = diam_edt * l0_edt_seg
             
         total_drag_force -= 0.5 * rho * cd * node_area * v_rel_norm * v_rel
 
@@ -321,7 +350,7 @@ def compute_physics_metrics(t, X, p_arr):
         b_vec, _ = get_environment_optimized(r_mid, v_mid, t, p_arr, cos_tg, sin_tg)
         v_total_emf += np.dot(np.cross(v_mid, b_vec), r_seg)
         
-    i_dynamic = get_controlled_current(v_total_emf, pos, p_arr)
+    i_dynamic = get_controlled_current(v_total_emf, pos, vel, p_arr)
     
     for j in range(n_edt):
         p_a, p_b = pos[j], pos[j+1]

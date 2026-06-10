@@ -7,14 +7,17 @@ class SimulationParams:
         self.R_e = 6378137.0          # Earth's mean radius [m]
         self.J2 = 1.08263e-3          # J2 perturbation coefficient
 
+        # 1.1 System Configuration
+        self.system_config = 'SC_EDT_TARGET' # 'SC_ROPE_EDT_TARGET' or 'SC_EDT_TARGET'
+
         # 2. System Masses [kg]
         self.m_target = 500.0         # Target satellite mass
-        self.m_sc = 100            # Our spacecraft mass
-        self.m_tip = 2.0             # EDT tip mass (boom/weight)
+        self.m_sc = 100.0            # Our spacecraft mass
+        self.m_tip = 2.0             # EDT tip mass (boom/weight) - Only for SC_ROPE_EDT_TARGET
         self.area_tip = 0.1          # Tip mass drag area [m^2] (10cm x 10cm)
 
-        # 3. Tether Properties (Rope: Target-SC)
-        self.L_rope = 100.0            # Nominal rope length [m]
+        # 3. Rope Properties (Rope: Target-SC) - Only for SC_ROPE_EDT_TARGET
+        self.L_rope = 50.0            # Nominal rope length [m]
         self.E_rope = 100e9           # Young's Modulus (Kevlar) [Pa]
         self.diam_rope = 0.002        # 2mm rope
         
@@ -26,9 +29,9 @@ class SimulationParams:
         # c = beta * k = 2 * zeta * sqrt(k*m) => beta = 2 * zeta / w
         self.beta_rope = 2.0 * 0.5 / w_rope
 
-        # 4. EDT Properties (SC-Tip)
-        self.L_edt = 500.0            # Total EDT length [m]
-        self.N_edt = 5               # Number of segments
+        # 4. EDT Properties (SC-Tip or SC-Target)
+        self.L_edt = 1000.0            # Total EDT length [m]
+        self.N_edt = 4                # Number of segments
         self.E_edt = 70e9             # Young's Modulus (Aluminum) [Pa]
 
         self.diam_edt = 0.0015        # 1.5mm wire
@@ -36,7 +39,7 @@ class SimulationParams:
         
         # Scientific Scaling: Derive mass from geometry
         self.area_edt = np.pi * (self.diam_edt / 2.0)**2
-        self.m_edt_total = self.L_edt * self.area_edt * self.rho_aluminum
+        self.m_edt_total = self.L_edt * self.area_edt * self.rho_aluminum # mass edt doesnt count for mass tip, when it has one
         
         # Derived EDT Damping (Targeting zeta = 0.7 for critical damping of 'snaps')
         l_seg = self.L_edt / self.N_edt
@@ -60,24 +63,31 @@ class SimulationParams:
         # 6. Initial Orbit (LEO)
         self.alt = 800e3              # Altitude [m]
         self.inc = np.radians(87)   # Inclination [rad]
-        self.e = 0.00                # Near-circular eccentricity
-        self.mission_config = 'PERPENDICULAR' # 'PERPENDICULAR' or 'RADIAL'
+        self.e = 0.001                # Near-circular eccentricity
+        # 'RADIAL' (both topologies), 'PERPENDICULAR' (legacy only),
+        # 'FULL_IN_TRACK' (SC_EDT_TARGET only)
+        self.mission_config = 'RADIAL'
 
         # 7. Control Parameters
         self.control_enable = False    # Enable closed-loop control
         self.pitch_target = 0.0        # Target libration angle [rad]
-        self.pitch_limit = np.radians(20.0) # Limit for libration angle [rad]
-        self.k_p = 50.0                # Proportional gain [V/rad]
+        self.pitch_limit = np.radians(5.0) # Tighten limit for libration angle [rad]
+        self.k_p = 10.0                # Lower proportional gain [V/rad]
+        self.k_d = 20000.0             # Significantly higher derivative gain [V/(rad/s)]
         self.v_max = 100.0             # Maximum active voltage [V]
 
     @property
     def num_masses(self):
-        return 2 + self.N_edt
+        if self.system_config == 'SC_EDT_TARGET':
+            return 1 + self.N_edt
+        else:
+            return 2 + self.N_edt
 
     def to_dict(self):
         """Converts parameters to a structured dictionary for YAML export."""
         return {
             "mission_config": self.mission_config,
+            "system_config": self.system_config,
             "physical_constants": {
                 "mu": float(self.mu),
                 "R_e": float(self.R_e),
@@ -127,6 +137,7 @@ class SimulationParams:
                 "pitch_target": float(self.pitch_target),
                 "pitch_limit": float(self.pitch_limit),
                 "k_p": float(self.k_p),
+                "k_d": float(self.k_d),
                 "v_max": float(self.v_max),
             }
         }
@@ -153,6 +164,7 @@ class SimulationParams:
         
         # 0. Mission Config
         obj.mission_config = p_dict.get("mission_config", obj.mission_config)
+        obj.system_config = p_dict.get("system_config", obj.system_config)
         
         # 1. Physical Constants
         phys = p_dict.get("physical_constants", {})
@@ -212,12 +224,36 @@ class SimulationParams:
             obj.pitch_target = ctrl.get("pitch_target", obj.pitch_target)
             obj.pitch_limit = ctrl.get("pitch_limit", obj.pitch_limit)
             obj.k_p = ctrl.get("k_p", obj.k_p)
+            obj.k_d = ctrl.get("k_d", obj.k_d)
             obj.v_max = ctrl.get("v_max", obj.v_max)
 
         return obj
 
+    def update_derived_params(self):
+        """Recalculates derived parameters like k_rope, beta_edt, r_total."""
+        # 1. Rope
+        area_rope = np.pi * (self.diam_rope / 2.0)**2
+        self.k_rope = (self.E_rope * area_rope) / self.L_rope
+        w_rope = np.sqrt(self.k_rope / self.m_sc)
+        self.beta_rope = 2.0 * 0.5 / w_rope
+
+        # 2. EDT
+        self.area_edt = np.pi * (self.diam_edt / 2.0)**2
+        self.m_edt_total = self.L_edt * self.area_edt * self.rho_aluminum
+        
+        l_seg = self.L_edt / self.N_edt
+        m_seg = self.m_edt_total / self.N_edt
+        k_seg = (self.E_edt * self.area_edt) / l_seg
+        w_seg = np.sqrt(k_seg / m_seg)
+        self.beta_edt = 2.0 * 0.7 / w_seg
+        
+        # 3. Electrical
+        self.r_wire = self.rho_al_res * self.L_edt / self.area_edt 
+        self.r_total = self.r_wire + self.z_plasma + self.r_load
+
     def to_numba_params(self):
-        """Returns a flat array for Numba consumption"""
+        """Returns a flat array for Numba consumption, first updating derived values."""
+        self.update_derived_params()
         return np.array([
             self.mu, self.R_e, self.J2,
             self.m_target, self.m_sc, self.m_tip,
@@ -226,7 +262,8 @@ class SimulationParams:
             self.E_edt, self.diam_edt, self.area_edt, self.beta_edt,
             self.rho_al_res, self.z_plasma, self.r_load, self.r_wire, self.r_total, self.Cd, self.Area_sc,
             self.area_tip, self.rho_aluminum, self.num_masses,
-            1.0 if self.control_enable else 0.0, self.pitch_target, self.pitch_limit, self.k_p, self.v_max
+            1.0 if self.control_enable else 0.0, self.pitch_target, self.pitch_limit, self.k_p, self.v_max, self.k_d,
+            1.0 if self.system_config == 'SC_EDT_TARGET' else 0.0
         ], dtype=np.float64)
 
 # Indices for the flat array
@@ -263,7 +300,9 @@ IDX_PITCH_TARGET = 29
 IDX_PITCH_LIMIT = 30
 IDX_K_P = 31
 IDX_V_MAX = 32
+IDX_K_D = 33
+IDX_SYSTEM_CONFIG = 34
 
 # Integrator-only indices (added to the end of the flat array in engine.py)
-IDX_PROGRESS = 33
-IDX_ABORT = 34
+IDX_PROGRESS = 35
+IDX_ABORT = 36
