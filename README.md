@@ -30,7 +30,7 @@ The system is modeled as a chain of **7 point masses** (including the Spacecraft
 
 ### 2. Environmental Forces
 - **Magnetic Field (IGRF-2000):** Implements the **International Geomagnetic Reference Field (8th Gen)** up to Degree 4. Captures Earth's non-dipole components and the South Atlantic Anomaly (SAA). *Ref: IAGA Working Group V-MOD (2000).*
-- **Atmospheric Drag:** **High-Fidelity Multi-layer Exponential Model** (ref: *Vallado 2013, Table 8-4*). Uses **US Standard Atmosphere 1976** for the 0 km base, **CIRA-72** for 25–500 km, and **CIRA-72 with $T_\infty = 1000~\text{K}$** for 500–1000 km. Includes a **Harris-Priester Diurnal Bulge** correction (*ref: Harris & Priester 1962*) that models density variation lagged by ~2 hours from the sub-solar point.
+- **Atmospheric Drag:** **Harris-Priester Atmospheric Density Model** (ref: *Vallado / Long et al. 1989*). Numba-accelerated with `fastmath=True` for high-performance trajectory propagation. Includes a **Diurnal Bulge** correction that models density variation lagged by ~2 hours from the sub-solar point. Legacy multi-layer exponential models (ref: *Vallado 2013, Table 8-4*) are also maintained for validation.
 
 ### 3. Numerical Integration
 Three compiled integrators live in `integrators.py`; they keep the integration loop entirely outside the Python interpreter, eliminating the per-RHS-call overhead that dominated the previous `scipy.solve_ivp` profile.

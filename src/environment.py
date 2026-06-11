@@ -3,33 +3,6 @@ from numba import njit
 import params as p
 from frames import get_earth_rotation_components, eci_to_ecef, ecef_to_eci
 
-@njit(fastmath=True)
-def get_environment_fast(r_eci, v, t, p_arr):
-    """
-    Numba-optimized environment function.
-    Returns (B_vec, rho) as a tuple for speed.
-    """
-    r_norm = np.linalg.norm(r_eci)
-    
-    # --- A. FRAME TRANSFORMATION (ECI to ECEF) ---
-    cos_tg, sin_tg = get_earth_rotation_components(t)
-    r_ecef = eci_to_ecef(r_eci, cos_tg, sin_tg)
-    
-    # --- B. COMPUTE MAGNETIC FIELD ---
-    g, h = get_igrf2000_coeffs()
-    B_ecef = compute_igrf_ecef(r_ecef, g, h)
-    
-    # --- C. FRAME TRANSFORMATION (ECEF back to ECI) ---
-    B_eci = ecef_to_eci(B_ecef, cos_tg, sin_tg)
-    
-    # --- D. ATMOSPHERIC DENSITY (rho) ---
-    h_km = (r_norm - p_arr[p.IDX_RE]) / 1000.0
-    rho_base = get_density_standard(h_km)
-    
-    sun_dir = get_sun_direction(t)
-    rho = apply_diurnal_bulge(rho_base, r_eci, sun_dir)
-    
-    return B_eci, rho
 
 @njit(fastmath=True)
 def get_sun_direction(t):
@@ -48,6 +21,7 @@ def get_sun_direction(t):
         np.sin(lambda_sun) * np.sin(epsilon)
     ])
     return s / np.linalg.norm(s)
+
 
 @njit(fastmath=True)
 def apply_diurnal_bulge(rho_base, r_eci, sun_dir):
@@ -81,6 +55,86 @@ def apply_diurnal_bulge(rho_base, r_eci, sun_dir):
     phi_factor = ((1.0 + cos_phi) / 2.0)**3
     
     return rho_base * (1.0 + delta * phi_factor)
+
+
+@njit(fastmath=True)
+def harris_priester_density(alt_km, cos_phi):
+    """
+    Harris-Priester atmospheric density model with diurnal variation.
+    Based on Vallado / Long et al. 1989 table.
+    
+    Parameters:
+    -----------
+    alt_km : float
+        Altitude in km (100 to 1000 km, clamped to range)
+    cos_phi : float
+        Cosine of angle between position vector and bulge center
+        (bulge center lags Sun by ~30 degrees)
+    
+    Returns:
+    --------
+    rho : float
+        Atmospheric density in kg/m^3
+    """
+    
+    # Harris-Priester table from Vallado
+    altitudes = np.array([
+        100.0, 120.0, 130.0, 140.0, 150.0, 160.0, 170.0, 180.0, 190.0, 200.0,
+        210.0, 220.0, 230.0, 240.0, 250.0, 260.0, 280.0, 290.0, 300.0, 320.0,
+        340.0, 360.0, 380.0, 400.0, 420.0, 440.0, 460.0, 480.0, 500.0, 520.0,
+        540.0, 560.0, 580.0, 600.0, 620.0, 640.0, 660.0, 680.0, 700.0, 720.0,
+        760.0, 780.0, 800.0, 840.0, 880.0, 920.0, 960.0, 1000.0
+    ])
+    
+    min_dens = np.array([
+        4.974e-07, 2.490e-08, 8.377e-09, 3.899e-09, 2.122e-09, 1.263e-09,
+        8.008e-10, 5.283e-10, 3.617e-10, 2.557e-10, 1.839e-10, 1.341e-10,
+        9.949e-11, 7.488e-11, 5.709e-11, 4.403e-11, 2.697e-11, 2.139e-11,
+        1.708e-11, 1.099e-11, 7.214e-12, 4.824e-12, 3.274e-12, 2.249e-12,
+        1.558e-12, 1.091e-12, 7.701e-13, 5.474e-13, 3.916e-13, 2.819e-13,
+        2.042e-13, 1.488e-13, 1.092e-13, 8.070e-14, 6.012e-14, 4.519e-14,
+        3.430e-14, 2.620e-14, 2.043e-14, 1.607e-14, 1.036e-14, 8.496e-15,
+        7.069e-15, 4.680e-15, 3.200e-15, 2.210e-15, 1.560e-15, 1.150e-15
+    ])
+    
+    max_dens = np.array([
+        4.974e-07, 2.490e-08, 8.710e-09, 4.059e-09, 2.215e-09, 1.344e-09,
+        8.758e-10, 6.010e-10, 4.297e-10, 3.162e-10, 2.396e-10, 1.853e-10,
+        1.455e-10, 1.157e-10, 9.308e-11, 7.555e-11, 5.095e-11, 4.226e-11,
+        3.526e-11, 2.511e-11, 1.819e-11, 1.337e-11, 9.955e-12, 7.492e-12,
+        5.684e-12, 4.355e-12, 3.362e-12, 2.612e-12, 2.042e-12, 1.605e-12,
+        1.267e-12, 1.005e-12, 7.997e-13, 6.390e-13, 5.123e-13, 4.121e-13,
+        3.325e-13, 2.691e-13, 2.185e-13, 1.779e-13, 1.190e-13, 9.776e-14,
+        8.059e-14, 5.741e-14, 4.210e-14, 3.130e-14, 2.360e-14, 1.810e-14
+    ])
+    
+    # Clamp altitude to table range
+    if alt_km < 100.0:
+        alt_km = 100.0
+    elif alt_km > 1000.0:
+        alt_km = 1000.0
+    
+    # Find interpolation index (linear search - fast for small table)
+    idx = 0
+    for i in range(len(altitudes) - 1):
+        if alt_km <= altitudes[i + 1]:
+            idx = i
+            break
+    else:
+        idx = len(altitudes) - 2
+    
+    # Linear interpolation for min and max densities
+    t = (alt_km - altitudes[idx]) / (altitudes[idx + 1] - altitudes[idx])
+    
+    rho_min = min_dens[idx] + t * (min_dens[idx + 1] - min_dens[idx])
+    rho_max = max_dens[idx] + t * (max_dens[idx + 1] - max_dens[idx])
+    
+    # Harris-Priester diurnal factor (n=2)
+    # cos_phi = 1 at bulge center, -1 at opposite side
+    phi_factor = ((1.0 + cos_phi) / 2.0) ** 2
+    
+    return rho_min + (rho_max - rho_min) * phi_factor
+
 
 @njit(fastmath=True)
 def get_density_standard(h_km):
@@ -121,10 +175,12 @@ def get_density_standard(h_km):
     
     return rho_ref[idx] * np.exp(-(h_km - h_ref[idx]) / H_ref[idx])
 
+
 @njit(fastmath=True)
 def get_environment_optimized(r_eci, v, t, p_arr, cos_tg, sin_tg):
     """
     Optimized environment function using pre-calculated rotation components.
+    Uses Harris-Priester density model for high fidelity.
     """
     r_norm = np.linalg.norm(r_eci)
     
@@ -132,20 +188,41 @@ def get_environment_optimized(r_eci, v, t, p_arr, cos_tg, sin_tg):
     r_ecef = eci_to_ecef(r_eci, cos_tg, sin_tg)
     
     # --- B. COMPUTE MAGNETIC FIELD ---
-    # Coefficients are effectively cached by Numba if we don't re-create them poorly
     B_ecef = compute_igrf_ecef_fast(r_ecef)
     
     # --- C. FRAME TRANSFORMATION (ECEF back to ECI) ---
     B_eci = ecef_to_eci(B_ecef, cos_tg, sin_tg)
     
     # --- D. ATMOSPHERIC DENSITY (rho) ---
-    h_km = (r_norm - p_arr[p.IDX_RE]) / 1000.0
-    rho_base = get_density_standard(h_km)
+    alt_km = (r_norm - p_arr[p.IDX_RE]) / 1000.0
+
+    if alt_km < 150.0:
+        return get_density_standard(alt_km)
     
+    # Get Sun direction
     sun_dir = get_sun_direction(t)
-    rho = apply_diurnal_bulge(rho_base, r_eci, sun_dir)
+    
+    # Harris-Priester Bulge center lag (~30 degrees / 2 hours)
+    # lag = -0.5236; cos and sin of -30 degrees
+    cos_l, sin_l = 0.8660254037844387, -0.49999999999999994
+    
+    # Compute cos(phi) = angle between position and bulge center
+    bulge_dir_x = cos_l * sun_dir[0] - sin_l * sun_dir[1]
+    bulge_dir_y = sin_l * sun_dir[0] + cos_l * sun_dir[1]
+    bulge_dir_z = sun_dir[2]
+    
+    cos_phi = (r_eci[0]*bulge_dir_x + r_eci[1]*bulge_dir_y + r_eci[2]*bulge_dir_z) / r_norm
+    
+    # Clamp for numerical stability
+    if cos_phi > 1.0:
+        cos_phi = 1.0
+    elif cos_phi < -1.0:
+        cos_phi = -1.0
+        
+    rho = harris_priester_density(alt_km, cos_phi)
     
     return B_eci, rho
+
 
 @njit(fastmath=True)
 def compute_igrf_ecef_fast(r_ecef):

@@ -270,7 +270,7 @@ def run_mission(args=None):
     method = args.method if args else 'RK45'
     
     sampling_hz = 1.0
-    t_end = 24 * 60 * 60 # 10 hours
+    t_end = 4 * 60 * 60 # 10 hours
     step_size = 100000.0
 
     # 1. Setup Phase
