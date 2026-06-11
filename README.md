@@ -1,14 +1,27 @@
 # EDT Deorbiting Simulation: High-Fidelity Hybrid Multi-Body System
 
 ## Project Objective
-This project provides a high-fidelity Python simulation of an Active Debris Removal (ADR) mission. The scenario involves a **100kg Spacecraft (SC)** that has captured a **target satellite** using a net and rope. To perform the deorbiting maneuver, the SC deploys a **Electrodynamic Tether (EDT)** with a tip mass.
+This project provides a high-fidelity Python simulation of an Active Debris Removal (ADR) mission. The scenario involves a **100kg Spacecraft (SC)** that has captured a **target satellite**.
+
+### Supported System Configurations
+The simulation supports two primary hardware architectures:
+1. **Direct EDT Link to the net:** The Spacecraft is connected directly to the Target satellite via the Electrodynamic Tether.
+2. **Rope-Link with Dangling EDT:** The Spacecraft and Target are connected by a short (10m) non-conducting rope, while the EDT (200m) dangles from the Spacecraft with a tip mass at the end.
+
+
+## Mission Configurations
+The simulation supports multiple initial alignment modes, selectable at the start of a new mission:
+- **Perpendicular (in System config 2 only):** The Spacecraft and Target are separated in-track (horizontal), with the EDT deployed radially inward. This is the standard "Gravity-Gradient stable" starting point for most tether missions.
+- **Radial:** All components (Target, SC, and EDT) are aligned along the local vertical. The Target is farthest from Earth, and the EDT tip is closest. This mode tests the system's response to a purely vertical deployment.
+- **Full In-Track (in System config 1 only):** The whole SC-EDT-Target chain is laid along the velocity direction; Target leading, SC trailing.
+
 
 ## Mathematical Methods & High-Fidelity Assumptions
 
 The simulation follows advanced methodologies from scientific literature (e.g., *Zhong & Zhu, 2014*, *ProSEDS Mission Reports*) to ensure both physical realism and numerical stability.
 
 ### 1. Multi-Body Dynamics (Lumped Mass Model)
-The system is modeled as a chain of **7 point masses** (default: $N_{edt}=5$) in Earth-Centered Inertial (ECI) coordinates.
+The system is modeled as a chain of **7 point masses** (including the Spacecraft and Target, $N_{edt}=5$) in Earth-Centered Inertial (ECI) coordinates.
 - **Node Indices:** Node 0 (Tip) -> Nodes 1-4 (EDT Beads) -> Node 5 (Spacecraft) -> Node 6 (Target).
 - **Material-Based Stiffness:** Unlike basic models using arbitrary springs, this simulation derives stiffness ($k = EA/L$) from real material properties:
   - **EDT:** 70 GPa Aluminum (1.5mm diameter).
@@ -17,39 +30,15 @@ The system is modeled as a chain of **7 point masses** (default: $N_{edt}=5$) in
 - **Smooth-Slack Transition:** Replaces the discontinuous `max(0, tension)` with a sigmoid-scaled smooth transition. This eliminates numerical shocks when the tether retightens.
 
 ### 2. Environmental Forces
-- **Gravity (J2):** Includes Earth's central gravity and the **J2 perturbation** (zonal harmonic $J_2 = 1.0826 \times 10^{-3}$).
-- **Magnetic Field:** Implements the **IGRF-2000 Model** (up to Degree 4). This captures the Earth's non-dipole components and the South Atlantic Anomaly (SAA).
-- **Atmospheric Drag:** **Multi-layer Exponential Model** (Vallado/US Standard Atmosphere 1976) with **Harris-Priester Diurnal Bulge** correction.
-
-## Mission Configurations
-The simulation now supports two initial alignment modes, selectable at the start of a new mission:
-- **Perpendicular (Default):** The Spacecraft and Target are separated in-track (horizontal), with the EDT deployed radially inward. This is the standard "Gravity-Gradient stable" starting point for most tether missions.
-- **Radial:** All components (Target, SC, and EDT) are aligned along the local vertical. The Target is farthest from Earth, and the EDT tip is closest. This mode tests the system's response to a purely vertical deployment.
-
-## Environmental Fidelity & Scientific Suitability
-
-### Model and scientific requirements
-
-| Feature | Current Model | Scientific Requirement | Impact |
-| :--- | :--- | :--- | :--- |
-| **Gravity** | J2 (Oblateness) | EGM96 (70x70 harmonics) | J2 captures 99% of perturbations. Missing higher terms affects sub-meter precision over months. |
-| **Magnetic Field** | IGRF-2000 (Deg 4) | IGRF-13 | IGRF-2000 Deg 4 captures >99% of the field strength. Excellent for Lorentz force fidelity. |
-| **Atmosphere** | Multi-layer Exp + Bulge | NRLMSISE-00 | Current model captures primary altitude and diurnal trends. NRLMSISE adds solar flux (F10.7) sensitivity. |
-| **Third Body** | None | Sun/Moon/SRP | Required for high-altitude (MEO/GEO) or long-duration LEO missions. |
+- **Magnetic Field (IGRF-2000):** Implements the **International Geomagnetic Reference Field (8th Gen)** up to Degree 4. Captures Earth's non-dipole components and the South Atlantic Anomaly (SAA). *Ref: IAGA Working Group V-MOD (2000).*
+- **Atmospheric Drag:** **Multi-layer Exponential Model** (ref: *Vallado 2013, Table 8-4*) with a **Harris-Priester Diurnal Bulge** correction (*ref: Harris & Priester 1962*) that models density variation lagged by ~2 hours from the sub-solar point.
 
 ### 3. Numerical Integration
-Four compiled integrators live in `integrators.py`; they keep the integration loop entirely outside the Python interpreter, eliminating the per-RHS-call overhead that dominated the previous `scipy.solve_ivp` profile.
+Three compiled integrators live in `integrators.py`; they keep the integration loop entirely outside the Python interpreter, eliminating the per-RHS-call overhead that dominated the previous `scipy.solve_ivp` profile.
 
 - **`RK45`** (default): Adaptive Dormand-Prince 5(4) implemented in pure `@njit`, with FSAL and cubic-Hermite dense output. Best for the smooth-orbit regime — roughly 2× faster than the previous scipy RK45 path.
 - **`LSODA`**: numbalsoda's compiled LSODA, called via a `@cfunc` RHS adapter. Implicit BDF for the stiff aluminum EDT modes.
-- **`RADAU`**: Scipy's Radau (implicit) implementation, useful for extremely stiff systems where BDF methods are preferred.
-- **`VERLET`**: numba compiled Fixed-step Velocity Verlet integrator of order 2
-
-## Mission Configurations
-The simulation supports multiple initial alignment modes:
-- **Perpendicular (Default):** The Spacecraft and Target are separated in-track (horizontal), with the EDT deployed radially inward. This is the standard "Gravity-Gradient stable" starting point for most tether missions.
-- **Radial:** All components (Target, SC, and EDT) are aligned along the local vertical.
-- **Full In-Track (SC_EDT_TARGET only):** The whole SC-EDT-Target chain is laid along the velocity direction; Target leading, SC trailing.
+- **`VERLET`**: Numba compiled Fixed-step Velocity Verlet integrator of order 2. Critical for long-term energy conservation and libration analysis in conservative (non-dissipative) scenarios.
 
 ## File Structure
 - `src/`: Core source code for the simulation.
@@ -108,7 +97,7 @@ source .venv/bin/activate
    ```bash
    python src/simulate.py --method RK45    # Numba Dormand-Prince 5(4), default
    python src/simulate.py --method LSODA   # numbalsoda LSODA
-   python src/simulate.py --method RADAU   # Scipy Radau
+   python src/simulate.py --method VERLET  # Velocity Verlet
    ```
 3. **Visualize**:
    ```bash
@@ -126,3 +115,10 @@ source .venv/bin/activate
 ## Assumptions
 - Constant current along the EDT.
 - Rigid-body rotational dynamics of the satellites are neglected (point-mass approximation).
+
+## Next Steps
+- **Rigid-body dynamics:** consider moment of inertia and rigid-body dynamics of the satellites.
+- **High-Degree Gravity:** Implement EGM96 (up to 70x70) to improve sub-meter precision over long durations.
+- **Updated Magnetic Model:** Transition from IGRF-2000 to IGRF-13 for modern epoch accuracy.
+- **Advanced Atmosphere:** Integrate NRLMSISE-00 to include sensitivity to solar flux (F10.7) and geomagnetic activity.
+- **Third Body Perturbations:** Add Sun/Moon gravitational influence and Solar Radiation Pressure (SRP) for high-altitude mission support.sition from IGRF-2000 to IGRF-13 for modern epoch accuracy.
