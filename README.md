@@ -18,7 +18,6 @@ The simulation supports multiple initial alignment modes, selectable at the star
 
 ## Mathematical Methods & High-Fidelity Assumptions
 
-The simulation follows advanced methodologies from scientific literature (e.g., *Zhong & Zhu, 2014*, *ProSEDS Mission Reports*) to ensure both physical realism and numerical stability.
 
 ### 1. Multi-Body Dynamics (Lumped Mass Model)
 The system is modeled as a chain of **7 point masses** (including the Spacecraft and Target, $N_{edt}=5$) in Earth-Centered Inertial (ECI) coordinates.
@@ -31,7 +30,7 @@ The system is modeled as a chain of **7 point masses** (including the Spacecraft
 
 ### 2. Environmental Forces
 - **Magnetic Field (IGRF-2000):** Implements the **International Geomagnetic Reference Field (8th Gen)** up to Degree 4. Captures Earth's non-dipole components and the South Atlantic Anomaly (SAA). *Ref: IAGA Working Group V-MOD (2000).*
-- **Atmospheric Drag:** **Multi-layer Exponential Model** (ref: *Vallado 2013, Table 8-4*) with a **Harris-Priester Diurnal Bulge** correction (*ref: Harris & Priester 1962*) that models density variation lagged by ~2 hours from the sub-solar point.
+- **Atmospheric Drag:** **High-Fidelity Multi-layer Exponential Model** (ref: *Vallado 2013, Table 8-4*). Uses **US Standard Atmosphere 1976** for the 0 km base, **CIRA-72** for 25–500 km, and **CIRA-72 with $T_\infty = 1000~\text{K}$** for 500–1000 km. Includes a **Harris-Priester Diurnal Bulge** correction (*ref: Harris & Priester 1962*) that models density variation lagged by ~2 hours from the sub-solar point.
 
 ### 3. Numerical Integration
 Three compiled integrators live in `integrators.py`; they keep the integration loop entirely outside the Python interpreter, eliminating the per-RHS-call overhead that dominated the previous `scipy.solve_ivp` profile.
