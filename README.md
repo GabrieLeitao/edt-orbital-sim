@@ -28,8 +28,7 @@ The simulation now supports two initial alignment modes, selectable at the start
 
 ## Environmental Fidelity & Scientific Suitability
 
-### Is this good for scientific orbital simulation?
-This engine is designed as a **high-fidelity multi-body dynamics simulator** for tethered systems. With the recent integration of IGRF and multi-layer atmospheric models, it provides significant scientific value for LEO mission analysis.
+### Model and scientific requirements
 
 | Feature | Current Model | Scientific Requirement | Impact |
 | :--- | :--- | :--- | :--- |
@@ -37,16 +36,6 @@ This engine is designed as a **high-fidelity multi-body dynamics simulator** for
 | **Magnetic Field** | IGRF-2000 (Deg 4) | IGRF-13 | IGRF-2000 Deg 4 captures >99% of the field strength. Excellent for Lorentz force fidelity. |
 | **Atmosphere** | Multi-layer Exp + Bulge | NRLMSISE-00 | Current model captures primary altitude and diurnal trends. NRLMSISE adds solar flux (F10.7) sensitivity. |
 | **Third Body** | None | Sun/Moon/SRP | Required for high-altitude (MEO/GEO) or long-duration LEO missions. |
-
-**Verdict:** 
-- **For Tether Dynamics & Deorbiting Research:** Excellent. The combination of multi-body coupling, material-specific damping, IGRF magnetic fields, and dynamic atmospheric density makes this a robust tool for studying EDT performance.
-- **For Precision Navigation:** Good, but requires EGM96 gravity and full IGRF-13/solar-flux models for centimeter-level accuracy over long epochs.
-
-### Note: The "Snapping" & "Slingshot" Phenomenon
-If you observe the EDT "snapping" or "slingshotting" the spacecraft:
-1. **Libration Instability:** The Lorentz force acts as a non-conservative drag. If the current is too high, the tether swings ("librates") away from the vertical. If it swings past the stable limit, it may go slack and then violently "whip" back when tension returns.
-2. **Numerical Stiffness:** The aluminum EDT is extremely stiff ($E = 70$ GPa). Small displacements cause massive forces. The `smooth_tension` function in `dynamics.py` mitigates this, but extreme maneuvers may still trigger sharp transients.
-3. **Remedy:** Reduce `I_edt` in `params.py` or increase `beta_edt` (damping) to stabilize the system.
 
 ### 3. Numerical Integration
 Four compiled integrators live in `integrators.py`; they keep the integration loop entirely outside the Python interpreter, eliminating the per-RHS-call overhead that dominated the previous `scipy.solve_ivp` profile.
@@ -137,14 +126,3 @@ source .venv/bin/activate
 ## Assumptions
 - Constant current along the EDT.
 - Rigid-body rotational dynamics of the satellites are neglected (point-mass approximation).
-
-
-## TODO
-- [x] plot current on EDT
-- [x] plot Lorentz force and air drag on same graph
-- [x] altitude km throughout orbit
-- [x] high-fidelity environment (IGRF + Multi-layer Drag)
-- [ ] test with higher sigmoid (25 vs 50)
-- [ ] test implicit model w/ vs wo/ jacobian matrix (LSODA via numbalsoda needs analytic Jacobian wired through `@cfunc`)
-- [x] orbit inclination
-- [x] compiled integration loop (Numba RK45 + numbalsoda LSODA)

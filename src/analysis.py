@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import os
 from numba import njit
-from dynamics import get_mass_fast, compute_physics_metrics
+from dynamics import get_mass_fast, compute_physics_metrics, smooth_tension
 import params as p
 import yaml
 import hashlib
@@ -123,12 +123,49 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params, include_sma=True, sma_
         idx_sc = n_edt
         idx_end = n_edt + 1
 
+    # Initialize telemetry dict
+    telemetry = {
+        "sma_km": sma / 1000.0,
+        "current_a": current,
+        "lorentz_n": lorentz,
+        "drag_n": drag,
+        "pitch_deg": pitch,
+        "energy_j": energy,
+        "rope_l_m": rope_L,
+        "edt_l_m": edt_L
+    }
+
+    # Derived EDT Stiffness
+    area_edt = p_arr[p.IDX_AREA_EDT]
+    l_edt_seg = p_arr[p.IDX_L_EDT] / n_edt
+    k_edt_seg = (p_arr[p.IDX_E_EDT] * area_edt) / l_edt_seg
+    beta_edt = p_arr[p.IDX_BETA_EDT]
+
     for i in range(count):
         p_frame = X_vals[i, :3*num_masses].reshape((num_masses, 3))
         v_frame = X_vals[i, 3*num_masses:].reshape((num_masses, 3))
         
         energy[i] = calculate_total_energy_fast(p_frame, v_frame, masses, p_arr)
         
+        # Calculate Tension per segment
+        for j in range(n_edt):
+            p_a, p_b = p_frame[j], p_frame[j+1]
+            v_a, v_b = v_frame[j], v_frame[j+1]
+            
+            r_seg = p_b - p_a
+            v_seg = v_b - v_a
+            l_seg = np.linalg.norm(r_seg)
+            l_seg_safe = max(l_seg, 1e-6)
+            l_dot_seg = np.dot(r_seg, v_seg) / l_seg_safe
+            
+            t_seg = smooth_tension(l_seg - l_edt_seg, l_dot_seg, k_edt_seg, beta_edt)
+            
+            # Store in the telemetry dict
+            key = f"edt_tension_{j}_n"
+            if key not in telemetry:
+                telemetry[key] = np.zeros(count)
+            telemetry[key][i] = t_seg
+
         if is_sc_edt_target:
             rope_L[i] = 0.0
             edt_L[i] = np.linalg.norm(p_frame[idx_end] - p_frame[idx_start])
@@ -155,16 +192,6 @@ def post_process_telemetry(t_vals, X_vals, p_arr, params, include_sma=True, sma_
         lorentz[i] = lor
         drag[i] = drg
         
-    telemetry = {
-        "sma_km": sma / 1000.0,
-        "current_a": current,
-        "lorentz_n": lorentz,
-        "drag_n": drag,
-        "pitch_deg": pitch,
-        "energy_j": energy,
-        "rope_l_m": rope_L,
-        "edt_l_m": edt_L
-    }
     return telemetry
 
 def save_csv(filename, run_folder, t_vals, telemetry_dict, X_vals, params, silent=False, append=False):

@@ -75,11 +75,11 @@ def run_single_n(n, t_end, method):
 
 def run_convergence():
     """Performs spatial convergence test by varying N_edt using parallel execution."""
-    n_edt_values = [2, 4, 12, 20]
+    n_edt_values = [2, 5, 10]
     results = []
     
-    t_end = 4 * 3600 
-    method = 'VERLET'
+    t_end = 24 * 3600 
+    method = 'RK45'
     
     print(f"--- Starting ISOLATED Spatial Convergence Test ---")
     print(f"Mode: Clean-Room (J2=Off, Inc=0, Conservative)")

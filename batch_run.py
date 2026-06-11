@@ -5,31 +5,51 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Define your parameter spaces
-lengths = [1500.0, 2500.0]
+lengths = [1000.0, 1500.0, 2000.0]
 masses = [300.0, 400.0, 600.0]
-inclinations = [0.0, 28.5, 51.6]
+inclinations = [98]
 # lengths = [500.0, 1000.0, 2000.0, 1500.0, 2500.0]
 # masses = [300.0, 400.0, 600.0]
 # inclinations = [0.0, 28.5, 51.6]
 
-scenarios = [
-    {"target_mass": 400.0, "edt_length": 2500.0, "inclination": 0.0, "system_config": "SC_EDT_TARGET", "mission_config": "RADIAL"},
-    {"target_mass": 300.0, "edt_length": 2500.0, "inclination": 0.0, "system_config": "SC_EDT_TARGET", "mission_config": "RADIAL"},
-    {"target_mass": 400.0, "edt_length": 1500.0, "inclination": 0.0, "system_config": "SC_EDT_TARGET", "mission_config": "RADIAL"},
-]
+scenarios = []
+
+# scenarios = [
+#     {"target_mass": 400.0, "edt_length": 2500.0, "inclination": 0.0, "system_config": "SC_EDT_TARGET", "mission_config": "RADIAL"},
+#     {"target_mass": 300.0, "edt_length": 2500.0, "inclination": 0.0, "system_config": "SC_EDT_TARGET", "mission_config": "RADIAL"},
+#     {"target_mass": 400.0, "edt_length": 1500.0, "inclination": 0.0, "system_config": "SC_EDT_TARGET", "mission_config": "RADIAL"},
+# ]
+
+completed_runs = {
+    (300.0, 1500.0, 51.6),
+    (300.0, 1500.0, 28.5),
+    (300.0, 1500.0, 0.0),
+    (300.0, 1500.0, 87.0),
+    (400.0, 1000.0, 51.6),
+    (300.0, 1000.0, 51.6),
+    (600.0, 1000.0, 51.6),
+    (300.0, 1000.0, 87.0),
+    (600.0, 1000.0, 28.5),
+    (400.0, 1000.0, 28.5),
+    (600.0, 1000.0, 87.0),
+    (400.0, 1000.0, 0.0),
+    (400.0, 1000.0, 87.0),
+    (300.0, 1000.0, 28.5),
+    (300.0, 1000.0, 0.0),
+}
 
 # Generate every permutation using itertools.product
-# for length, mass, inc in itertools.product(lengths, masses, inclinations):
-#     if mass == 600.0 and length == 1000.0 and inc == 0.0:
-#         continue  # Skip the one you already simulated
+for length, mass, inc in itertools.product(lengths, masses, inclinations):
+    if (mass, length, inc) in completed_runs:  # Note: order matches how you stored it
+        continue  # Skip the one you already simulated
         
-#     scenarios.append({
-#         "target_mass": mass,
-#         "edt_length": length,
-#         "inclination": inc,
-#         "system_config": "SC_EDT_TARGET",
-#         "mission_config": "RADIAL"
-#     })
+    scenarios.append({
+        "target_mass": mass,
+        "edt_length": length,
+        "inclination": inc,
+        "system_config": "SC_EDT_TARGET",
+        "mission_config": "RADIAL"
+    })
 
 def run_sim(s):
     # Using sys.executable guarantees the workers use the exact same python 
