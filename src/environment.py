@@ -197,7 +197,7 @@ def get_environment_optimized(r_eci, v, t, p_arr, cos_tg, sin_tg):
     alt_km = (r_norm - p_arr[p.IDX_RE]) / 1000.0
 
     if alt_km < 150.0:
-        return get_density_standard(alt_km)
+        return B_eci, get_density_standard(alt_km)
     
     # Get Sun direction
     sun_dir = get_sun_direction(t)

@@ -30,7 +30,7 @@ class SimulationParams:
         self.beta_rope = 2.0 * 0.5 / w_rope
 
         # 4. EDT Properties (SC-Tip or SC-Target)
-        self.L_edt = 1000.0            # Total EDT length [m]
+        self.L_edt = 1500.0            # Total EDT length [m]
         self.N_edt = 4                # Number of segments
         self.E_edt = 70e9             # Young's Modulus (Aluminum) [Pa]
 
@@ -62,7 +62,7 @@ class SimulationParams:
 
         # 6. Initial Orbit (LEO)
         self.alt = 800e3              # Altitude [m]
-        self.inc = np.radians(87)   # Inclination [rad]
+        self.inc = np.radians(98)   # Inclination [rad]
         self.e = 0.001                # Near-circular eccentricity
         # 'RADIAL' (both topologies), 'PERPENDICULAR' (legacy only),
         # 'FULL_IN_TRACK' (SC_EDT_TARGET only)
