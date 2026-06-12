@@ -105,6 +105,7 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
     # Telemetry Data
     time_min = df['time_s'].values / 60.0
     sma_km = df['sma_km'].values if 'sma_km' in df.columns else np.zeros(frames)
+    pitch_deg = df['pitch_deg'].values if 'pitch_deg' in df.columns else np.zeros(frames)
     current_a = df['current_a'].values if 'current_a' in df.columns else np.zeros(frames)
     lorentz_n = df['lorentz_n'].values if 'lorentz_n' in df.columns else np.zeros(frames)
     drag_n = df['drag_n'].values if 'drag_n' in df.columns else np.zeros(frames)
@@ -121,11 +122,19 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
     ax_lvlh_3d = fig.add_subplot(3, 2, 2, projection='3d')
     ax_lvlh_3d.set_title("LVLH 3D Perspective")
 
-    # Subplot 3: Sat + Target (In-Plane)
+    # Subplot 3: Sat + Target (In-Plane) OR Libration
     ax_sat_target = fig.add_subplot(3, 2, 3)
-    ax_sat_target.set_title("Sat + Target Behavior (In-Plane)")
-    ax_sat_target.set_xlabel("In-Track [m]")
-    ax_sat_target.set_ylabel("Radial [m]")
+    if is_sc_edt_target:
+        ax_sat_target.set_title("System Libration (Pitch Angle)")
+        ax_sat_target.set_xlabel("Time [min]")
+        ax_sat_target.set_ylabel("Pitch [deg]")
+        ax_sat_target.plot(time_min, pitch_deg, 'g-', alpha=0.3)
+        line_pitch_indicator, = ax_sat_target.plot([], [], 'go', markersize=8)
+        v_line_pitch = ax_sat_target.axvline(0, color='k', linestyle='--', alpha=0.5)
+    else:
+        ax_sat_target.set_title("Sat + Target Behavior (In-Plane)")
+        ax_sat_target.set_xlabel("In-Track [m]")
+        ax_sat_target.set_ylabel("Radial [m]")
     ax_sat_target.grid(True)
 
     # Subplot 4: EDT Behavior (In-Plane)
@@ -201,11 +210,12 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
     ax_orbit.view_init(elev=20, azim=45) 
     ax_orbit.legend(loc='upper right', fontsize='small')
 
-    # Sat + Target Elements (2D)
-    line_st_rope, = ax_sat_target.plot([], [], 'k-', lw=2)
-    marker_target_st, = ax_sat_target.plot([], [], 'rs', markersize=8, label="Target")
-    marker_sc_st, = ax_sat_target.plot([], [], 'bo', markersize=6, label="SC")
-    ax_sat_target.legend()
+    # Sat + Target Elements (2D) - Only for legacy rope configuration
+    if not is_sc_edt_target:
+        line_st_rope, = ax_sat_target.plot([], [], 'k-', lw=2)
+        marker_target_st, = ax_sat_target.plot([], [], 'rs', markersize=8, label="Target")
+        marker_sc_st, = ax_sat_target.plot([], [], 'bo', markersize=6, label="SC")
+        ax_sat_target.legend()
 
     # EDT Elements (2D)
     line_edt_full, = ax_edt.plot([], [], 'g-', lw=1.5, alpha=0.8)
@@ -282,19 +292,18 @@ def interactive_visualization(csv_path=os.path.join("results", "simulation_resul
         r_lvlh = eci_to_lvlh(r_curr, v_target, r_target)
         it = r_lvlh[:, 0]; ct = r_lvlh[:, 1]; rd = r_lvlh[:, 2] 
 
-        # 3. Sat + Target View
-        # Legacy: SC and Target are joined by the rope. New topology has no rope —
-        # SC and Target are the endpoints of the full EDT chain, so draw the chain.
+        # 3. Sat + Target View / Libration
         if is_sc_edt_target:
-            line_st_rope.set_data(it, rd)
-            zoomed_limit_st = params.L_edt * 1.5
+            line_pitch_indicator.set_data([t_now], [pitch_deg[frame_idx]])
+            v_line_pitch.set_xdata([t_now])
         else:
+            # Legacy: SC and Target are joined by the rope.
             line_st_rope.set_data(it[[sc_idx, target_idx]], rd[[sc_idx, target_idx]])
+            marker_target_st.set_data([it[target_idx]], [rd[target_idx]])
+            marker_sc_st.set_data([it[sc_idx]], [rd[sc_idx]])
             zoomed_limit_st = params.L_rope * 1.5
-        marker_target_st.set_data([it[target_idx]], [rd[target_idx]])
-        marker_sc_st.set_data([it[sc_idx]], [rd[sc_idx]])
-        ax_sat_target.set_xlim([-zoomed_limit_st, zoomed_limit_st])
-        ax_sat_target.set_ylim([zoomed_limit_st, -zoomed_limit_st])
+            ax_sat_target.set_xlim([-zoomed_limit_st, zoomed_limit_st])
+            ax_sat_target.set_ylim([zoomed_limit_st, -zoomed_limit_st])
 
         # 4. EDT Behavior View
         line_edt_full.set_data(it, rd)

@@ -31,7 +31,7 @@ def plot_validation(run_folder, t_vals, energy, rope, pitch, edt, sma_km, params
     plt.plot(t_vals, rel_energy_error)
     plt.axhline(y=max_energy_err, color='k', ls=':', alpha=0.5, label=f'Max Error: {max_energy_err:.2e}')
     plt.axhline(y=-max_energy_err, color='k', ls=':', alpha=0.5)
-    plt.grid(True); plt.title("Numerical Energy Leakage (Should be ~0)")
+    plt.grid(True); plt.title("Numerical Energy Leakage")
     plt.ylabel("Rel Error [-]"); plt.legend()
     
     # 2. SMA Drift - Should be flat if J2=0 and Inc=0
@@ -39,7 +39,7 @@ def plot_validation(run_folder, t_vals, energy, rope, pitch, edt, sma_km, params
     plt.plot(t_vals, sma_drift_m, color='r')
     plt.axhline(y=max_sma_drift, color='k', ls=':', alpha=0.5, label=f'Max Drift: {max_sma_drift:.4f}m')
     plt.axhline(y=-max_sma_drift, color='k', ls=':', alpha=0.5)
-    plt.grid(True); plt.title("Numerical SMA Drift (Keplerian Check)")
+    plt.grid(True); plt.title("Numerical SMA Drift")
     plt.ylabel("Drift [m]"); plt.legend()
     
     # 3. EDT Integrity
