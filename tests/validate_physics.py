@@ -66,8 +66,8 @@ def run_validation():
     # --- SETUP "CLEAN ROOM" FOR NUMERICAL VALIDATION ---
     # Correctly disable all non-conservative forces
     params.Cd = 0.0           # Disable Drag
-    params.J2 = 0.0           # Disable J2
-    params.inc = 0.0          # Equatorial
+    # params.J2 = 0.0           # Disable J2
+    # params.inc = 0.0          # Equatorial
     params.r_load = 1e18      # Effectively zero current (Lorentz Off)
     
     p_arr = params.to_numba_params()

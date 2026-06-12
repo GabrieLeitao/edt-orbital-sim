@@ -86,7 +86,9 @@ def plot_simulation(t_vals, sma_com, X_vals, params, run_folder):
     ax_edt.set_ylim([zoomed_limit_edt, -zoomed_limit_edt])
     
     plt.tight_layout()
-    plt.savefig(os.path.join(run_folder, "simulation_plots.png"))
+    plot_path = os.path.join(run_folder, "simulation_plots.png")
+    plt.savefig(plot_path)
+    print(f"Simulation plots saved at {plot_path}")
     # plt.show()
 
 def find_resumable_runs():
@@ -305,6 +307,9 @@ def run_mission(args=None):
             # engine.integrate_system will fill these in-place
             sol = integrate_system(X_curr, (t_curr, t_next), p_arr, pbar=pbar, sampling_hz=sampling_hz, method=method)
             
+            # Use t_curr to determine if we should include the first point in CSV
+            is_first_seg = (t_curr == 0.0 and not os.path.exists(os.path.join(rf, "simulation_results.csv")))
+
             # Copy solution to memmap
             # Note: sol.t[0] and sol.y[:,0] are the same as t_curr and X_curr
             # We overwrite the segment in memmap starting from curr_idx
@@ -317,22 +322,13 @@ def run_mission(args=None):
             X_curr = sol.y[:, -1]
             curr_idx = curr_idx + len_sol - 1
             
-            # Mid-loop Health Check
-            is_sane, reason = check_state_sanity(X_curr, params)
-            if not is_sane:
-                print(f"\nCRITICAL: Simulation became unstable at t={t_curr:.1f}s. {reason}")
-                break
-            
-            # Binary Checkpoint (Metadata only)
+            # Binary Checkpoint (Metadata + Incremental CSV)
             if not skip_checkpoint:
                 pbar.set_postfix_str("Checkpointing...")
                 total_comp = comp_prev + (time.time() - session_start)
                 save_checkpoint(rf, t_curr, X_curr, p_arr, current_idx=curr_idx, total_compute_time=total_comp)
                 
                 # Silent CSV update (append only the new segment)
-                # Skip the first point of the segment to avoid duplicates in CSV,
-                # unless it's the very first segment of the whole mission.
-                is_first_seg = (t_curr == 0.0 and not os.path.exists(os.path.join(rf, "simulation_results.csv")))
                 if is_first_seg:
                     t_app, y_app = sol.t, sol.y.T
                 else:
@@ -342,6 +338,12 @@ def run_mission(args=None):
                     tel_seg = post_process_telemetry(t_app, y_app, p_arr, params, include_sma=True)
                     save_csv("simulation_results.csv", rf, t_app, tel_seg, y_app, params, silent=True, append=True)
                 pbar.set_postfix_str("")
+
+            # Mid-loop Health Check
+            is_sane, reason = check_state_sanity(X_curr, params)
+            if not is_sane:
+                print(f"\nCRITICAL: Simulation became unstable at t={t_curr:.1f}s. {reason}")
+                break
 
     # 4. Finalization Phase
     total_compute_time = comp_prev + (time.time() - session_start)
@@ -367,14 +369,14 @@ def run_mission(args=None):
         print(f"Mean Decay Rate: {res['mean_decay_rate_mps']:.4f} m/s ({res['mean_decay_rate_kmhr']:.4f} km/hr)")
         print(f"Projected Decay: {res['mean_decay_per_orbit_m']:.3f} m/orbit == {res['mean_decay_rate_kmyear']:.2f} km/year")
 
-    # Final Save Phase (Only if not already saved via checkpoints)
-    if skip_checkpoint:
-        print("Saving final telemetry to CSV...")
-        telemetry_final = post_process_telemetry(final_t, final_X, p_arr, params, include_sma=True, sma_array=sma_final)
-        save_csv("simulation_results.csv", rf, final_t, telemetry_final, final_X, params)
+    # Final Save Phase (Always save full telemetry at the end)
+    print("Saving final telemetry to CSV...")
+    telemetry_final = post_process_telemetry(final_t, final_X, p_arr, params, include_sma=True, sma_array=sma_final)
+    save_csv("simulation_results.csv", rf, final_t, telemetry_final, final_X, params, silent=True)
 
     save_config_params_results_yaml("config_params_results.yaml", rf, final_t, sma_final, params, p_arr, is_final=True, total_compute_time=total_compute_time)
     plot_simulation(final_t, sma_final, final_X, params, rf)
+
 
 def parse_arguments():
     """Handles command-line argument parsing."""

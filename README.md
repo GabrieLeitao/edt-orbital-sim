@@ -35,7 +35,11 @@ The system is modeled as a chain of **7 point masses** (including the Spacecraft
 ### 3. Numerical Integration
 Three compiled integrators live in `integrators.py`; they keep the integration loop entirely outside the Python interpreter, eliminating the per-RHS-call overhead that dominated the previous `scipy.solve_ivp` profile.
 
-- **`RK45`** (default): Adaptive Dormand-Prince 5(4) implemented in pure `@njit`, with FSAL and cubic-Hermite dense output. Best for the smooth-orbit regime — roughly 2× faster than the previous scipy RK45 path.
+- **`RK45`** (default): Adaptive **Dormand-Prince 5(4)** (DOPRI5) implemented in pure `@njit`.
+  - **Efficiency:** Features First Same As Last (FSAL) optimization, reducing evaluations from 7 to 6 per successful step.
+  - **Precision:** Uses 5th-order solution for propagation with a 4th-order embedded error estimate for step-size control.
+  - **Continuous Output:** Employs cubic Hermite interpolation.
+  - **Reference:** *Dormand, J. R.; Prince, P. J. (1980), "A family of embedded Runge–Kutta formulae", Journal of Computational and Applied Mathematics.*
 - **`LSODA`**: numbalsoda's compiled LSODA, called via a `@cfunc` RHS adapter. Implicit BDF for the stiff aluminum EDT modes.
 - **`VERLET`**: Numba compiled Fixed-step Velocity Verlet integrator of order 2. Critical for long-term energy conservation and libration analysis in conservative (non-dissipative) scenarios.
 
